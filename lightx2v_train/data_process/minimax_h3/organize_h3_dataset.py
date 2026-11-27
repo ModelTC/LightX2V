@@ -27,7 +27,6 @@ FIELDS = {
     'teacher_video': 'video_path', 'teacher_video_latent': 'video_latent_path',
     'teacher_audio_latent': 'audio_latent_path',
 }
-TEACHER_ASSETS = ('teacher_video', 'teacher_video_latent', 'teacher_audio_latent')
 
 
 def text(value):
@@ -280,17 +279,6 @@ class Catalog:
         self.inputs[signature].add(index)
 
 
-def select_training_assets(record):
-    assets = dict(record['assets'])
-    prompt = record['teacher_prompt']
-    reason = None
-    if record['teacher_origin'] == 'api' and prompt and prompt['variant'] == 'original':
-        reason = 'api_teacher_original_prompt'
-        for field in TEACHER_ASSETS:
-            assets[field] = None
-    return assets, reason
-
-
 class Assets:
     """Copy each asset once; persisted hashes allow interrupted runs to resume."""
     def __init__(self, output, dry_run):
@@ -395,7 +383,8 @@ def main():
                 catalog.issues.append({'manifest': str(manifest), 'line': number, 'error': str(error)})
         print(f'{kind}: {count} rows from {manifest}', flush=True)
     for item in catalog.records:
-        item['training_assets'], item['teacher_exclusion_reason'] = select_training_assets(item)
+        item['training_assets'] = dict(item['assets'])
+        item['teacher_exclusion_reason'] = None
     videos = sorted({r['training_assets']['teacher_video'] for r in catalog.records if r['training_assets']['teacher_video'] and r['training_assets']['teacher_video'].is_file()})
     media = {}
     if not args.skip_video_probe:

@@ -43,7 +43,7 @@ def load_model(config, stage="dense", permutations=None, shared_state=None, shar
         replace_ffns(model, permutations, stage, config["moe"], shared_state, balance_weight=config["balance_weight"])
         for index in config["moe"]["layers"]:
             model.transformer_blocks[index].ff.requires_grad_(True)
-            if stage == "moe":
+            if stage == "moe" and not config["moe"].get("train_shared", False):
                 model.transformer_blocks[index].ff.shared.requires_grad_(False)
     elif stage == "calibrate":
         for index in config["moe"]["layers"]:

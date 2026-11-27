@@ -11,11 +11,12 @@ import torch.distributed as dist
 import torch.distributed.checkpoint as dcp
 from torch.distributed.checkpoint.state_dict import StateDictOptions, get_state_dict, set_state_dict
 
-from .checkpoint import latest_checkpoint, publish_checkpoint
+from .checkpoint import latest_checkpoint, load_model_checkpoint, publish_checkpoint
 from .data import CachedAVDataset
 from .encoding import StageTimer
-from .loss import BlockFeatures, feature_distillation_loss, modality_losses
+from .loss import BlockFeatures, feature_distillation_loss, flow_matching_losses, modality_losses
 from .moe import SparseSwiGLU, taylor_channels
+from .optimization import learning_rate_factor, optimizer_groups, parameter_samples, sample_base_sigma
 from .runtime import AVSample, load_model, save_ffns, shift_sigma
 
 
@@ -57,6 +58,9 @@ class Dense2MoETrainer:
     def resume(self, student, optimizer):
         directory = latest_checkpoint(self.output / "checkpoints", self.stage)
         if directory is None:
+            if self.config.get("initialize_checkpoint"):
+                count = load_model_checkpoint(student, self.config["initialize_checkpoint"])
+                self.log({"event": "initialize_checkpoint", "parameters": count, "source": self.config["initialize_checkpoint"], "optimizer": "fresh"})
             return 0
         metadata = json.loads((directory / "progress.json").read_text())
         if metadata["config"] != self.config:
@@ -66,6 +70,31 @@ class Dense2MoETrainer:
         dcp.load({"model": model, "optimizer": optim}, checkpoint_id=directory)
         set_state_dict(student, optimizer, model_state_dict=model, optim_state_dict=optim, options=options)
         return metadata["step"]
+
+    @torch.no_grad()
+    def validate(self, teacher, student, step):
+        """Fixed training examples/noise: a comparable diagnostic, not a held-out score."""
+        settings = self.config["validation"]
+        index = settings["indices"][self.rank % len(settings["indices"])]
+        condition, clean = self.dataset.load(index, self.device)
+        clean = {name: value.float() for name, value in clean.items()}
+        sample = AVSample(condition, self.dataset.records[index], self.device)
+        generator = torch.Generator(device=self.device).manual_seed(settings["seed"] + self.rank)
+        noise = {name: torch.randn(value.shape, device=self.device, generator=generator) for name, value in clean.items()}
+        was_training = student.training
+        student.eval()
+        for base in settings["base_sigmas"]:
+            sigmas = {name: shift_sigma(torch.tensor(base), self.config["flow_shift"][name]) for name in clean}
+            noisy = {name: (1 - sigmas[name].to(self.device)) * value + sigmas[name].to(self.device) * noise[name] for name, value in clean.items()}
+            target = sample.forward(teacher, noisy, sigmas)
+            prediction = sample.forward(student, noisy, sigmas)
+            errors = {"kd_" + name: loss for name, loss in modality_losses(prediction, target).items()}
+            errors.update({"flow_" + name: loss for name, loss in flow_matching_losses(prediction, clean, noise).items()})
+            errors.update({"teacher_flow_" + name: loss for name, loss in flow_matching_losses(target, clean, noise).items()})
+            values = torch.stack(list(errors.values()))
+            dist.all_reduce(values)
+            self.log({"event": "validation", "stage": self.stage, "step": step, "base_sigma": base, **dict(zip(errors, (values / self.world).tolist()))})
+        student.train(was_training)
 
     def train(self):
         config, stage = self.config, self.stage
@@ -90,12 +119,16 @@ class Dense2MoETrainer:
         teacher_features = BlockFeatures(teacher, self.layers, offload=True)
         student_features = BlockFeatures(student, self.layers)
         params = [p for p in student.parameters() if p.requires_grad]
-        optimizer = torch.optim.AdamW(params, lr=config["learning_rate"], weight_decay=0.01, foreach=False)
+        optimizer = torch.optim.AdamW(optimizer_groups(student, config), foreach=False)
+        base_lrs = [group["lr"] for group in optimizer.param_groups]
         start = self.resume(student, optimizer) if stage != "calibrate" else 0
         scores = {}
         iterations = config["iterations"][stage]
+        self.log({"event": "optimizer", "groups": [{"name": group["name"], "lr": group["lr"], "tensors": len(group["params"]), "parameters": sum(p.numel() for p in group["params"])} for group in optimizer.param_groups]})
         # Keep uneven model-loading time out of the first training-step timings.
         dist.barrier()
+        if stage != "calibrate" and config.get("validation"):
+            self.validate(teacher, student, start)
         for step in range(start, iterations):
             torch.cuda.synchronize()
             torch.cuda.reset_peak_memory_stats()
@@ -111,12 +144,13 @@ class Dense2MoETrainer:
                 self.log({"stage": stage, "step": step + 1, "event": "batch", "samples": batch})
             with timer.measure("cache_load"):
                 condition, clean = self.dataset.load(record_index, self.device)
+                clean = {name: value.float() for name, value in clean.items()}
             sample = AVSample(condition, record, self.device)
             for name, value in clean.items():
                 if value.shape != sample.shapes[name] or not torch.isfinite(value).all():
                     raise ValueError(f"Invalid encoded {name} latent for {record['video_path']}: {tuple(value.shape)}")
             noise = {name: torch.randn_like(value) for name, value in clean.items()}
-            base_sigma = torch.rand((), device="cpu")
+            base_sigma = sample_base_sigma(config)
             sigmas = {name: shift_sigma(base_sigma, config["flow_shift"][name]) for name in clean}
             noisy = {name: (1 - sigmas[name].to(self.device)) * value + sigmas[name].to(self.device) * noise[name] for name, value in clean.items()}
             if stage == "calibrate":
@@ -143,21 +177,34 @@ class Dense2MoETrainer:
                     features = student_features.stop()
                     errors = modality_losses(prediction, target)
                     output_loss = sum(config["loss_weights"][name] * value for name, value in errors.items())
-                    feature_loss = feature_distillation_loss(output_loss, features, reference)
+                    feature_loss = feature_distillation_loss(output_loss, features, reference, config.get("feature_loss", "output_balanced"))
+                    flow_errors = flow_matching_losses(prediction, clean, noise)
+                    flow_loss = sum(config["loss_weights"][name] * value for name, value in flow_errors.items())
                     auxiliary = [b.ff.balance_loss for b in student.transformer_blocks if isinstance(b.ff, SparseSwiGLU)]
                     balance = torch.stack(auxiliary).mean() if auxiliary else output_loss.new_zeros(())
                     # Router gradients enter locally inside each FFN.
-                    loss = output_loss + config["feature_weight"] * feature_loss + config["balance_weight"] * balance
+                    loss = output_loss + config["feature_weight"] * feature_loss + config.get("flow_weight", 0.0) * flow_loss + config["balance_weight"] * balance
                     metrics = {name + "_loss": float(value.detach()) for name, value in errors.items()}
                     metrics.update(output_loss=float(output_loss.detach()), feature_loss=float(feature_loss.detach()), balance_loss=float(balance.detach()))
+                    metrics.update(flow_loss=float(flow_loss.detach()), **{"flow_" + name: float(value.detach()) for name, value in flow_errors.items()})
+                    if not torch.isfinite(loss.detach()):
+                        raise FloatingPointError(f"Nonfinite {stage} loss at step {step + 1}")
                 with timer.measure("backward"):
                     loss.backward()
                 teacher_features.values.clear()
                 student_features.values.clear()
-                del target, reference, features, output_loss, feature_loss, auxiliary, balance, errors
+                del target, reference, features, output_loss, feature_loss, flow_loss, flow_errors, auxiliary, balance, errors
                 with timer.measure("optimizer"):
-                    torch.nn.utils.clip_grad_norm_(params, 1.0)
+                    norm = torch.nn.utils.clip_grad_norm_(params, config.get("max_grad_norm", 1.0), error_if_nonfinite=True)
+                    metrics["grad_norm"] = float(norm.full_tensor() if hasattr(norm, "full_tensor") else norm)
+                    factor = learning_rate_factor(step, iterations, config.get("warmup_steps", 0), config.get("min_lr_ratio", 1.0))
+                    for group, lr in zip(optimizer.param_groups, base_lrs):
+                        group["lr"] = lr * factor
+                    before = parameter_samples(optimizer)
                     optimizer.step()
+                    after = parameter_samples(optimizer)
+                    for name in before:
+                        metrics[name + "_update_rms"] = float((after[name] - before[name]).square().mean().sqrt())
             optimizer.zero_grad(set_to_none=True)
             if not torch.isfinite(loss.detach()):
                 raise FloatingPointError(f"Nonfinite {stage} loss at step {step + 1}")
@@ -172,6 +219,8 @@ class Dense2MoETrainer:
                 {
                     "stage": stage,
                     "step": step + 1,
+                    "base_sigma_rank0": float(base_sigma),
+                    "learning_rates": {group["name"]: group["lr"] for group in optimizer.param_groups},
                     "loss": metrics_tensor[0].item(),
                     **dict(zip(metrics, metrics_tensor[1:].tolist())),
                     "seconds": max(item["total"] for item in timings),
@@ -180,7 +229,9 @@ class Dense2MoETrainer:
                 }
             )
             del loss, prediction, sample, clean, noisy, noise, condition
-            if stage != "calibrate" and ((step + 1) % config["save_every"] == 0 or step + 1 == iterations):
+            if stage != "calibrate" and config.get("validation") and (step + 1) % config["validation"]["every"] == 0:
+                self.validate(teacher, student, step + 1)
+            if stage != "calibrate" and ((step + 1) % config["save_every"] == 0 or step + 1 in config.get("save_steps", []) or step + 1 == iterations):
                 self.checkpoint(student, optimizer, step + 1)
         if stage == "calibrate":
             if self.rank == 0:

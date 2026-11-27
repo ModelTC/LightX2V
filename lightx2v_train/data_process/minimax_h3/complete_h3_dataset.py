@@ -5,6 +5,8 @@ Missing conditions are encoded from their recorded text and first image.
 Missing teacher videos use the original dense FL2AV checkpoint: 30 sigma
 points / 29 Euler evaluations, video/audio shift 12/3. Existing MP4s are only
 VAE-encoded. Newly encoded training latents are derived from the saved video.
+With --encode-only, absent videos remain missing and neither DiT nor the
+condition encoder is loaded. Receipts are isolated from denoising runs.
 """
 
 from __future__ import annotations
@@ -45,8 +47,11 @@ def present(row, key):
     return value is not None
 
 
-def work_needed(row):
-    return [key for key in ASSETS if not present(row, key)]
+def work_needed(row, encode_only=False):
+    if encode_only and not present(row, 'teacher_video'):
+        return []
+    keys = ASSETS[2:] if encode_only else ASSETS
+    return [key for key in keys if not present(row, key)]
 
 
 def condition_prompt(row):
@@ -58,7 +63,7 @@ def condition_prompt(row):
     return info
 
 
-def validate_rows(rows):
+def validate_rows(rows, encode_only=False):
     ids = set()
     for row in rows:
         sample_id = row['sample_id']
@@ -69,9 +74,9 @@ def validate_rows(rows):
             raise ValueError(f'{sample_id}: expected T2AV or I2AV')
         if min(row['width'], row['height'], row['num_frames']) <= 0 or row['width'] % 32 or row['height'] % 32 or row['num_frames'] % 17 != 5 or row['fps'] != 24:
             raise ValueError(f'{sample_id}: invalid H3 dimensions/fps')
-        if work_needed(row):
+        if work_needed(row, encode_only):
             condition_prompt(row)
-            if not present(row, 'condition') and row['task'] == 'i2av' and not present(row, 'image'):
+            if not encode_only and not present(row, 'condition') and row['task'] == 'i2av' and not present(row, 'image'):
                 raise ValueError(f'{sample_id}: missing I2AV image for condition encoding')
 
 
@@ -97,6 +102,9 @@ def torch_save(path, value):
 
 
 def completion_recipe(args):
+    if args.encode_only:
+        return {'mode': 'encode_only', 'model_path': str(args.model_path), 'posterior': 'mode',
+                'latent_source': 'saved_teacher_video', 'version': 1}
     return {
         'model_path': str(args.model_path), 'condition_model_path': str(args.condition_model_path),
         'schedule_points': args.schedule_points, 'video_shift': 12.0, 'audio_shift': 3.0,
@@ -109,13 +117,13 @@ class Worker:
     def __init__(self, args):
         self.args = args
         self.root = args.manifest.parent
-        self.state = self.root / 'data' / 'completion'
+        self.state = self.root / 'data' / ('vae_completion' if args.encode_only else 'completion')
         self.state.mkdir(parents=True, exist_ok=True)
         self.rows = json.loads(args.manifest.read_text())
         self.jobs, self.errors = [], []
         self.recipe = completion_recipe(args)
         for index, source in enumerate(self.rows):
-            if index % args.workers != args.worker or not work_needed(source):
+            if index % args.workers != args.worker or not work_needed(source, args.encode_only):
                 continue
             path = self.state / (source['sample_id'] + '.json')
             identity = digest({'input': source, 'recipe': self.recipe})
@@ -276,7 +284,7 @@ class Worker:
         from diffusers.utils.export_utils import encode_video
         import encode_minimax_h3_teacher_av_latents as helper
 
-        jobs = [j for j in self.active() if work_needed(j['row'])]
+        jobs = [j for j in self.active() if work_needed(j['row'], self.args.encode_only)]
         if not jobs:
             return
         video_vae = AutoencoderKLMiniMaxH3.from_pretrained(str(self.args.model_path), subfolder='vae', torch_dtype=torch.float32, local_files_only=True).eval().requires_grad_(False).to('cuda:0')
@@ -336,7 +344,7 @@ class Worker:
                         tensor = helper.encode_video_latent(video_vae, pixels, torch.device('cuda:0'), 'mode', self.args.seed).to(torch.bfloat16)
                     if list(tensor.shape) != video_shape or not bool(torch.isfinite(tensor).all()):
                         raise ValueError('invalid video latent shape or values')
-                    destination = artifact(self.root, row, 'teacher_video_latent', '.pt')
+                    destination = artifact(self.root, row, 'vae_teacher_video_latent' if self.args.encode_only else 'teacher_video_latent', '.pt')
                     torch_save(destination, {'latents': tensor, 'normalized': True, 'latent_fingerprint': fingerprint})
                     row['teacher_video_latent'] = str(destination)
                     row.setdefault('latent_metadata', {})['latent_fingerprint'] = fingerprint
@@ -348,27 +356,31 @@ class Worker:
                         tensor = helper.encode_audio_latent(audio_vae, waveform, torch.device('cuda:0')).to(torch.bfloat16)
                     if list(tensor.shape) != [2, 32, audio_frames] or not bool(torch.isfinite(tensor).all()):
                         raise ValueError('invalid audio latent shape or values')
-                    destination = artifact(self.root, row, 'teacher_audio_latent', '.pt')
+                    destination = artifact(self.root, row, 'vae_teacher_audio_latent' if self.args.encode_only else 'teacher_audio_latent', '.pt')
                     torch_save(destination, tensor)
                     row['teacher_audio_latent'] = str(destination)
+                    self.commit(job, 'audio_latent')
                     del waveform, tensor
                 row['teacher_latent_prompt'] = row['teacher_prompt']
                 row['latent_metadata'] = {**row.get('latent_metadata', {}), 'video_latent_shape': video_shape, 'audio_latent_shape': [2, 32, audio_frames], 'cache_dtype': 'bf16', 'normalized': True}
                 issues = set(row.get('validation', {}).get('issues', []))
-                issues.difference_update('missing_' + key for key in ASSETS)
-                issues.discard('condition_prompt_unverified')
-                if row['condition_prompt']['sha256'] == row['teacher_prompt']['sha256']:
+                issues.difference_update('missing_' + key for key in ASSETS if present(row, key))
+                if row.get('condition_prompt'):
+                    issues.discard('condition_prompt_unverified')
+                if row.get('condition_prompt') and row.get('teacher_prompt') and row['condition_prompt']['sha256'] == row['teacher_prompt']['sha256']:
                     issues.discard('condition_teacher_prompt_mismatch')
                 row['validation'] = {**row.get('validation', {}), 'issues': sorted(issues)}
                 self.commit(job, 'complete')
-                artifact(self.root, row, 'completion', '.packed.pt').unlink(missing_ok=True)
+                if not self.args.encode_only:
+                    artifact(self.root, row, 'completion', '.packed.pt').unlink(missing_ok=True)
             except Exception as error:
                 self.failed(job, 'vae', error)
                 helper.release_device_memory()
 
     def run(self):
-        self.conditions()
-        self.generate()
+        if not self.args.encode_only:
+            self.conditions()
+            self.generate()
         self.media_and_latents()
         save_json(self.state / f'errors.worker{self.args.worker}.json', self.errors)
         return bool(self.errors)
@@ -377,12 +389,12 @@ class Worker:
 def launch(args):
     signal.signal(signal.SIGTERM, interrupt)
     rows = json.loads(args.manifest.read_text())
-    validate_rows(rows)
-    summary = Counter(key for row in rows for key in work_needed(row))
-    print(json.dumps({'records': len(rows), 'missing': dict(summary), 'schedule_points': args.schedule_points, 'model_evaluations': args.schedule_points - 1}, ensure_ascii=False), flush=True)
-    if args.plan or not summary:
+    validate_rows(rows, args.encode_only)
+    summary = Counter(key for row in rows for key in work_needed(row, args.encode_only))
+    print(json.dumps({'records': len(rows), 'mode': 'encode_only' if args.encode_only else 'complete', 'missing': dict(summary), 'skipped_missing_video': sum(not present(row, 'teacher_video') for row in rows) if args.encode_only else 0, 'model_evaluations': 0 if args.encode_only else args.schedule_points - 1}, ensure_ascii=False), flush=True)
+    if args.plan or (not summary and not args.encode_only):
         return 0
-    state = args.manifest.parent / 'data' / 'completion'
+    state = args.manifest.parent / 'data' / ('vae_completion' if args.encode_only else 'completion')
     state.mkdir(parents=True, exist_ok=True)
     with (state / '.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -390,9 +402,9 @@ def launch(args):
         backup = args.manifest.with_name('dataset.before_completion.' + hashlib.sha256(original).hexdigest()[:12] + '.json')
         if not backup.exists():
             backup.write_bytes(original)
-        gpus = args.gpus.split(',')
+        gpus = args.gpus.split(',') if summary else []
         processes, handles = [], []
-        logdir = args.manifest.parent / 'logs' / 'completion'
+        logdir = args.manifest.parent / 'logs' / ('vae_completion' if args.encode_only else 'completion')
         logdir.mkdir(parents=True, exist_ok=True)
         try:
             for rank, gpu in enumerate(gpus):
@@ -400,6 +412,8 @@ def launch(args):
                 handles.append(handle)
                 command = [sys.executable, '-u', str(Path(__file__).resolve()), '--manifest', str(args.manifest), '--model-path', str(args.model_path), '--worker', str(rank), '--workers', str(len(gpus)), '--schedule-points', str(args.schedule_points), '--seed', str(args.seed), '--attention-backend', args.attention_backend]
                 command.extend(['--condition-model-path', str(args.condition_model_path)])
+                if args.encode_only:
+                    command.append('--encode-only')
                 if args.attention_kernel_path:
                     command.extend(['--attention-kernel-path', str(args.attention_kernel_path)])
                 processes.append(subprocess.Popen(command, env={**os.environ, 'CUDA_VISIBLE_DEVICES': gpu, 'OMP_NUM_THREADS': '4', 'MKL_NUM_THREADS': '4'}, stdout=handle, stderr=subprocess.STDOUT))
@@ -419,13 +433,14 @@ def launch(args):
         recipe = completion_recipe(args)
         for index, row in enumerate(rows):
             receipt = state / (row['sample_id'] + '.json')
-            if work_needed(row) and receipt.is_file():
+            if work_needed(row, args.encode_only) and receipt.is_file():
                 saved = json.loads(receipt.read_text())
                 if saved['identity'] == digest({'input': row, 'recipe': recipe}):
                     rows[index] = saved['record']
         save_json(args.manifest, rows)
-        remaining = dict(Counter(key for row in rows for key in work_needed(row)))
-        save_json(args.manifest.parent / 'completion_report.json', {'records': len(rows), 'remaining': remaining, 'worker_exit_codes': statuses, 'logs': str(logdir)})
+        remaining = dict(Counter(key for row in rows for key in work_needed(row, args.encode_only)))
+        report_name = 'vae_completion_report.json' if args.encode_only else 'completion_report.json'
+        save_json(args.manifest.parent / report_name, {'records': len(rows), 'mode': 'encode_only' if args.encode_only else 'complete', 'remaining': remaining, 'skipped_missing_video': [row['sample_id'] for row in rows if args.encode_only and not present(row, 'teacher_video')], 'worker_exit_codes': statuses, 'logs': str(logdir)})
         print(json.dumps({'remaining': remaining, 'logs': str(logdir)}, ensure_ascii=False), flush=True)
         return int(any(statuses) or bool(remaining))
 
@@ -441,6 +456,7 @@ def main():
     parser.add_argument('--attention-backend', default='_flash_3_hub')
     parser.add_argument('--attention-kernel-path', type=Path, default=os.environ.get('H3_FA3_KERNEL_PATH'), help='Local FA3 Hub kernel snapshot; avoids network loading')
     parser.add_argument('--plan', action='store_true')
+    parser.add_argument('--encode-only', action='store_true', help='Only VAE-encode existing teacher videos; skip absent videos, never load DiT or the condition encoder')
     parser.add_argument('--worker', type=int)
     parser.add_argument('--workers', type=int, default=8)
     args = parser.parse_args()

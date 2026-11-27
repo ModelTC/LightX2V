@@ -1,96 +1,62 @@
-# H3 数据迁移、整理与 8 卡补齐
+# H3 API 视频整理与 8 卡 VAE 编码
 
-先用单独的 rsync 命令复制旧目录，再用一个 bash 入口自动完成：**整理统一 JSON → 8 卡补齐缺失视频和 AV latent**。后续数据全部使用 `/mnt/miaohua/gushiqiao/datasets/`。这里只处理 T2AV / I2AV，不启动训练；后续 PDMD 学生使用 4 步。
+当前默认流程：**重新纳入已有 API 视频（包括原始 prompt）→ 整理统一 JSON → 仅补视频/音频 VAE 编码**。不运行 DiT、不重新生成 teacher 视频、不编码 text/image condition。原有 `prepare_minimax_h3_dataset_8gpu.sh` 入口也转发到这条流程。
 
-## 单独复制旧目录
+只有同一条件、实际 prompt 和尺寸可对应的素材才会关联；不会把 original 请求的视频强行配给 enhanced condition。没有匹配视频的记录保留，teacher 字段仍可能为 null，并在最终报告列出。
+
+## 停止旧数据任务
+
+在新机器执行，只匹配本数据清单的补齐任务，不停止训练：
 
 ```bash
-rsync -aH --no-owner --no-group --partial --info=progress2 \
-  /mnt/lm_data_afs/gushiqiao/datasets/minimax_h3_teacher_latents_5s \
-  /mnt/miaohua/gushiqiao/datasets/
+pkill -TERM -f '[p]repare_minimax_h3_dataset_8gpu.sh' || true
+pkill -TERM -f '[p]repare_minimax_h3_dataset_vae_8gpu.sh' || true
+pkill -TERM -f '[c]omplete_h3_dataset.py.*--manifest /mnt/miaohua/gushiqiao/datasets/fl2av_dataset/h3_self_gen/dataset.json' || true
+while pgrep -f '[c]omplete_h3_dataset.py.*--manifest /mnt/miaohua/gushiqiao/datasets/fl2av_dataset/h3_self_gen/dataset.json' >/dev/null; do sleep 2; done
 ```
 
-源目录末尾不加 `/`，复制后得到 `datasets/minimax_h3_teacher_latents_5s/`。原目录保留；中断后重复同一 rsync 命令续传。复制成功后再运行下面的 bash。
+## 更新代码并启动
 
-## Bash 自动整理与补齐
-
-先同步新版 `lightx2v_train/scripts/prepare_minimax_h3_dataset_8gpu.sh` 及配套 Python 脚本。在新机器运行：
+将新版 `h3_dataset_tools.zip` 上传到 `/mnt/miaohua/gushiqiao/h3_dataset_tools.zip` 后：
 
 ```bash
 cd /mnt/lm_data_afs/gushiqiao/codes/news/LightX2V
 source /mnt/lm_data_afs/gushiqiao/envs/lightx2v_h3/bin/activate
+unzip -o /mnt/miaohua/gushiqiao/h3_dataset_tools.zip -d .
 
-nohup bash lightx2v_train/scripts/prepare_minimax_h3_dataset_8gpu.sh \
-  > /mnt/miaohua/gushiqiao/datasets/h3_dataset_pipeline.log 2>&1 < /dev/null &
-echo $! > /mnt/miaohua/gushiqiao/datasets/h3_dataset_pipeline.pid
-```
-
-复制需要 `rsync`；bash 流程需要 `unzip`、`flock`、`ffprobe` 和原有 H3 Python 环境。默认使用 0–7 卡，每卡独立 worker，单卡需容纳 BF16 H3 DiT。请在这 8 张卡可用时启动。
-
-## 自动执行的步骤
-
-1. **整理**：自动解压 I2AV 图片和 teacher 视频 ZIP，关联 condition、图片、视频及 AV latent，检查 latent shape，复制引用的素材到 `fl2av_dataset/h3_self_gen/data/`，生成 `dataset.json` 和 `report.json`。
-
-   所有训练资产路径必须位于 miaohua 内；历史 provenance 可以保留旧路径作为追溯信息。关联不明确的记录不会强行配对。出现被拒绝的源记录时停止在整理阶段，报告位置会写入日志。
-
-2. **补齐**：整理成功后自动启动 8 个 GPU worker。完成后回写同一个 JSON，不需要手动启动第二次命令。
-
-| 当前记录 | 操作 |
-| --- | --- |
-| condition 缺失 | 使用记录中的实际 prompt 编码；I2AV 同时编码首帧 |
-| 视频有，AV latent 缺一个或两个 | 只补缺失的 VAE 编码 |
-| 视频缺失，两个 AV latent 都有 | 从现有 latent 重建视频，保留已有 latent |
-| 视频缺失，AV latent 不完整 | 使用本地 H3 生成视频，再编码完整 AV latent |
-| 全部齐全 | 跳过 |
-
-每条记录保留自己的 `width`、`height`、`num_frames`、`fps`。API 使用非增强 prompt 生成的记录仍保留，仅暂时清空 teacher 视频及两个 latent 字段，再由本地 H3 补齐；官方 selfgen 数据不按此 API 规则清空。
-
-Teacher 使用原始 dense FL2AV H3，不加载 DCM / PDMD / MoE / LoRA。沿用旧出片设置：**30 个 sigma 点、29 次模型前向，视频／音频 shift=12／3**。4 步是后续学生训练参数。DiT 和 VAE 分阶段加载，不同时常驻显存。
-
-## 日志与输出
-
-```bash
-# 整理与补齐阶段进度
- tail -f /mnt/miaohua/gushiqiao/datasets/h3_dataset_pipeline.log
-
-# 每卡详细进度，gpu0 可换成 gpu1～gpu7
- tail -f /mnt/miaohua/gushiqiao/datasets/fl2av_dataset/h3_self_gen/logs/completion/gpu0.log
-
-# 最终汇总
- cat /mnt/miaohua/gushiqiao/datasets/fl2av_dataset/h3_self_gen/completion_report.json
-```
-
-最终数据清单：
-
-```text
-/mnt/miaohua/gushiqiao/datasets/fl2av_dataset/h3_self_gen/dataset.json
-```
-
-阶段日志都在 `h3_self_gen/logs/`：`extract_images.log`、`organize.log`、`completion.log`，以及 `completion/gpu*.log`。最终报告中 `remaining` 为空、所有 worker 退出码为 0 才表示全部完成。
-
-## 续跑
-
-复制中断时重跑 rsync；整理或补齐中断时重跑 bash。Bash 完全不访问旧数据目录：
-
-- `dataset.json` 不存在：继续整理并复用已复制素材。
-- `dataset.json` 已存在：保留，不重新整理覆盖。
-- 补齐记录完成：跳过；部分完成：读取逐条进度继续。
-
-首次补齐前自动备份 JSON；逐条进度写在 `data/completion/`。单条失败会记录 sample_id、阶段和 traceback，其他记录继续；主进程合并已完成部分并返回非零退出码。修复失败原因后重跑即可。
-
-不要在运行期间手动编辑 JSON，也不要绕过入口再次运行 organizer 覆盖已补齐的数据。数据文件路径已填写但文件丢失时明确报错，不自动改用其他文件。
-
-## 可选路径配置
-
-默认代码和 Python 环境沿用旧位置；**迁移的是数据目录**，不会搬动模型和环境。以下变量只在与你机器实际路径不符时覆盖：
-
-```bash
 export H3_DATA_ROOT=/mnt/miaohua/gushiqiao/datasets
 export H3_MODEL_PATH=/mnt/lm_data_afs/gushiqiao/models/MiniMax-H3
-export H3_FA3_KERNEL_PATH=/mnt/lm_data_afs/gushiqiao/cache/kernels/kernels--kernels-community--flash-attn3/snapshots/43f0bd269777115d94ff826e0d113ce9c1c9087b
 export H3_GPUS=0,1,2,3,4,5,6,7
+nohup bash lightx2v_train/scripts/prepare_minimax_h3_dataset_vae_8gpu.sh \
+  > "$H3_DATA_ROOT/h3_dataset_vae_pipeline.log" 2>&1 < /dev/null &
+echo $! > "$H3_DATA_ROOT/h3_dataset_vae_pipeline.pid"
 ```
 
-若文本编码器独立存放，设置 `H3_CONDITION_MODEL_PATH` 为包含 `text_encoder/`、`tokenizer/`、`processor/` 的目录；默认使用 `H3_MODEL_PATH`。FA3 使用显式本地内核路径，避免联网加载。
+首次运行自动备份 `dataset.json`、`report.json` 为 `*.before_api_video_vae.json`，即使已有旧清单也会重新整理。已有文件利用复制索引复用，不删除源数据或旧 DiT 中间结果。成功整理后写入 `.pipeline/api_video_vae_v1.organized`，重跑同一命令即可续传。
 
-本机已用真实权重验证 T2AV / I2AV 小尺寸生成链路、1344×768/124 帧视频的补编码、已有资产复用；全量 8 卡任务需要在新机器启动。
+如果后续补充了新的源数据，需要再次扫描：先停止数据任务，再删除这一个 marker 后重跑；不要删除 data 目录。
+
+依赖：原 H3 Python 环境、`unzip`、`flock`、`ffprobe`、`ffmpeg`。仅需模型的 `vae/` 与 `audio_vae/`；不需要 FA3 或加载 DiT。
+
+## 行为
+
+| 数据现状 | 操作 |
+|---|---|
+| 视频和两个 AV latent 都有 | 直接复用 |
+| 视频有，某个 latent 缺失 | 只编码缺失项 |
+| 没有匹配视频 | 保留 null 和现有字段，跳过，不做 teacher 采样或视频重建 |
+| condition 缺失 | 不补 condition，仍保留缺失标记 |
+
+VAE 使用 `posterior.mode()`，保存归一化 BF16 latent；video/audio 对应每条记录自己的尺寸与帧数。视频 latent 为 `[24,37,H/16,W/16]`（124 帧），音频 latent 为 `[2,32,207]`。已存在且关联正确的 latent 不重复编码。
+
+新进度记录：`data/vae_completion/`。新增 latent：`data/vae_teacher_video_latent/` 和 `data/vae_teacher_audio_latent/`。旧 `data/completion/` 的 DiT receipts、packed latent 不读取、不覆盖、不删除。
+
+## 日志和结果
+
+```bash
+tail -f /mnt/miaohua/gushiqiao/datasets/h3_dataset_vae_pipeline.log
+tail -f /mnt/miaohua/gushiqiao/datasets/fl2av_dataset/h3_self_gen/logs/vae_completion/gpu0.log
+cat /mnt/miaohua/gushiqiao/datasets/fl2av_dataset/h3_self_gen/vae_completion_report.json
+```
+
+GPU 日志会记录 `video_latent`、`audio_latent`、`complete`。启动摘要应为 `mode: encode_only`、`model_evaluations: 0`。`skipped_missing_video` 单独统计无视频记录，不应误认为编码失败。八个 worker 结束后才将 receipts 合并回 `dataset.json`；运行中看每卡日志，不根据主 JSON 中尚未回写的 null 判断进度。

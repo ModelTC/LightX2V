@@ -5,6 +5,18 @@ import shutil
 from pathlib import Path
 
 
+def load_model_checkpoint(model, directory):
+    """Load model tensors only, retaining newly unfrozen parameters and fresh Adam state."""
+    import torch.distributed.checkpoint as dcp
+
+    reader = dcp.FileSystemReader(directory)
+    keys = sorted(name.removeprefix("model.") for name in reader.read_metadata().state_dict_metadata if name.startswith("model."))
+    parameters = dict(model.named_parameters())
+    state = {"model": {name: parameters[name].detach() for name in keys}}
+    dcp.load(state, storage_reader=reader)
+    return len(keys)
+
+
 def publish_checkpoint(root, temporary, name, progress, limit):
     root, temporary = Path(root), Path(temporary)
     (temporary / "progress.json").write_text(json.dumps(progress, indent=2))

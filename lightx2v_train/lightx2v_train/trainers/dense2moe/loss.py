@@ -25,12 +25,40 @@ def modality_losses(student, teacher):
     return {name: F.mse_loss(value.float(), teacher[name].float()) for name, value in student.items()}
 
 
-def feature_distillation_loss(output, student_features, teacher_features):
+class RelativeFeatureMSE(torch.autograd.Function):
+    """Teacher-energy normalized MSE, independent of the output KD loss."""
+
+    @staticmethod
+    def forward(ctx, student, teacher):
+        target = teacher.to(student.device, non_blocking=True).float()
+        scale = target.square().mean().clamp_min(1e-6)
+        ctx.save_for_backward(student, teacher, scale)
+        return (student.float() - target).square().mean() / scale
+
+    @staticmethod
+    def backward(ctx, gradient):
+        student, teacher, scale = ctx.saved_tensors
+        target = teacher.to(student.device, non_blocking=True)
+        delta = (student.float() - target.float()) * (2.0 / student.numel())
+        return (delta * (gradient / scale)).to(student.dtype), None
+
+
+def feature_distillation_loss(output, student_features, teacher_features, mode="output_balanced"):
+    if mode == "relative":
+        return torch.stack([RelativeFeatureMSE.apply(s, t) for s, t in zip(student_features, teacher_features, strict=True)]).mean()
+    if mode != "output_balanced":
+        raise ValueError(f"Unknown feature loss: {mode}")
     errors = torch.stack([FeatureMSE.apply(s, t) for s, t in zip(student_features, teacher_features)])
     norms = torch.stack([t.float().norm().to(output.device) for t in teacher_features])
     # Weights are balancing coefficients, not trainable functions of the error.
     weights = (output.detach() / errors.detach().clamp_min(1e-12)) * (norms.mean() / norms.clamp_min(1e-12))
     return (weights * errors).sum()
+
+
+def flow_matching_losses(prediction, clean, noise):
+    # H3 predicts clean - noise, the opposite sign to many RF implementations.
+    target = {name: value.float() - noise[name].float() for name, value in clean.items()}
+    return modality_losses(prediction, target)
 
 
 class BlockFeatures:
