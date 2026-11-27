@@ -65,3 +65,5 @@ or cross-precision latency-ratio claim. Quality metric networks and dataset
 selection are unchanged; retained FP32 inference operations are recorded in
 `precision_policy`. `--backend` also selects a single backend in the default
 profile; omitting it preserves the original serial two-backend comparison.
+
+HY-Motion generation workers retain one byte in the selected CUDA primary context before CPU checkpoint loading. This makes the loading task visible to NVML; it changes no RNG state and remains outside request timing. The original exclusive-process/resource checks still reject external GPU processes.

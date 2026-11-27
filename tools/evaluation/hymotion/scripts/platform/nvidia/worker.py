@@ -26,6 +26,9 @@ def main():
         # Use this worker's normal primary context before CPU model preparation.
         # RNG setup, model loading, warmup and request timing remain downstream.
         torch.cuda.init()
+        # Context initialization alone may be invisible to NVML until the first
+        # allocation. Keep one byte alive during slow CPU checkpoint loading.
+        _context_guard = torch.empty(1, dtype=torch.uint8, device="cuda")
     try:
         runpy.run_path(command[0], run_name="__main__")
     except SystemExit as error:

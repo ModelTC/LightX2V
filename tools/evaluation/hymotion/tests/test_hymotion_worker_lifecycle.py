@@ -16,10 +16,12 @@ class WorkerLifecycleTests(unittest.TestCase):
             root = Path(directory)
             ready = root / "cuda-ready"
             (root / "torch.py").write_text(
-                "from pathlib import Path\nclass CUDA:\n def device_count(self): return 1\n def init(self): Path(" + repr(str(ready)) + ").write_text('ready')\ncuda = CUDA()\n"
+                "from pathlib import Path\nclass CUDA:\n def device_count(self): return 1\n def init(self): Path(" + repr(str(ready)) + ").write_text('ready')\ncuda = CUDA()\nuint8 = 'uint8'\n"
+                "def empty(size, dtype, device):\n assert (size, dtype, device) == (1, uint8, 'cuda')\n"
+                " assert Path(" + repr(str(ready)) + ").read_text() == 'ready'\n Path(" + repr(str(ready)) + ").write_text('visible')\n return object()\n"
             )
             script = root / "task.py"
-            script.write_text("from pathlib import Path\nassert Path(" + repr(str(ready)) + ").read_text() == 'ready'\n")
+            script.write_text("from pathlib import Path\nassert Path(" + repr(str(ready)) + ").read_text() == 'visible'\n")
             complete, release = root / "complete.json", root / "release.json"
             release.write_text("{}")
             result = subprocess.run(
