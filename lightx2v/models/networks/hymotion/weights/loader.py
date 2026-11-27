@@ -30,12 +30,13 @@ def load_hymotion(config):
     geometry_buffers = {"body_model.v_template", "body_model.j_template", "body_model.skin_weights", "body_model.skin_indices", "body_model.parents"}
     if set(missing) != geometry_buffers or unexpected:
         raise ValueError(f"HY-Motion checkpoint mismatch: missing={missing}, unexpected={unexpected}")
-    weights = weights.eval().float().cuda()
+    weights = weights.eval().float().to(config.get("device", "cuda"))
     bind_modules(weights.motion_transformer, dtype=torch.bfloat16)
     weights.requires_grad_(False)
     text = HYTextWeights(
         config.get("qwen_model_path", os.getenv("QWEN_MODEL_PATH", str(root / "Qwen3-8B"))),
         config.get("clip_model_path", os.getenv("CLIP_MODEL_PATH", str(root / "clip-vit-large-patch14"))),
         clip_text_cleanup=config.get("clip_text_cleanup", "basic"),
+        device=config.get("device", "cuda"),
     )
     return weights, text

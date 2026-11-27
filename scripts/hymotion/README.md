@@ -34,8 +34,9 @@ bash scripts/platforms/nvidia/run_hymotion.sh --num_frames 120
 实际帧数截断到 20–360，不做视频 VAE 的帧数对齐。输出 NPZ 包含原生 `poses`、`trans`、`betas`、`Rh`、
 `rot6d`、`keypoints3d` 和 `latent_denorm`，可用于动作可视化和后续动画处理。
 
-目前支持 NVIDIA A100 单卡、不量化、无 offload/cache。MLU、MetaX、Ascend 的 JSON
-与同名脚本是显式占位，执行会说明未实现并退出。
+支持 NVIDIA A100 和 MLU590 单卡，不量化、无 offload/cache。MLU590 使用 BF16 矩阵计算和 FP32 数值边界，保持 50 步 Euler、CFG=5、seed=42。执行
+`PLATFORM=cambricon_mlu MLU_VISIBLE_DEVICES=0 PYTHON_BIN=/path/to/torch_mlu/python bash scripts/platforms/mlu/run_hymotion.sh`
+启动。在已匹配 torch_mlu 与 torchvision 的环境中安装 `scripts/hymotion/requirements-mlu.txt`，不要运行 CUDA 专用的 `install_a100.sh`。MetaX 和 Ascend 仍为占位入口。MLU590 实机 smoke 验证前，不应视为已验收。
 
 CLIP 文本清理默认为 `clip_text_cleanup: basic`，复用 Transformers 的 BasicTokenizer，与原项目仅安装其 requirements.txt、没有额外 ftfy 时的行为一致。这样，其他模型安装 ftfy 不会悄然改变弯引号等 Unicode 输入的输出。若参考原项目环境显式安装了 ftfy，可在模型配置中设置 `clip_text_cleanup: ftfy` 对齐该清理方式。
 

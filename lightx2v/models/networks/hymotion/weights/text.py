@@ -29,15 +29,15 @@ def load_clip_tokenizer(path, cleanup):
 
 
 class HYTextWeights:
-    def __init__(self, qwen_path, clip_path, clip_text_cleanup="basic"):
+    def __init__(self, qwen_path, clip_path, clip_text_cleanup="basic", device="cuda"):
         qwen_path, clip_path = Path(qwen_path), Path(clip_path)
         self.qwen_config = json.loads((qwen_path / "config.json").read_text())
         clip_config = json.loads((clip_path / "config.json").read_text())
         self.clip_config = clip_config.get("text_config", clip_config)
-        self.qwen = TensorWeights(load_tensors(qwen_path, dtype=torch.bfloat16))
+        self.qwen = TensorWeights(load_tensors(qwen_path, dtype=torch.bfloat16, device=device))
         # The language head is not part of text conditioning.
         self.qwen.tensors.pop("lm_head.weight", None)
-        self.clip = TensorWeights(load_tensors(clip_path, dtype=torch.bfloat16))
+        self.clip = TensorWeights(load_tensors(clip_path, dtype=torch.bfloat16, device=device))
         self.clip.tensors = {k: v for k, v in self.clip.tensors.items() if k.startswith("text_model.")}
         self.tokenizer = AutoTokenizer.from_pretrained(qwen_path, padding_side="right", local_files_only=True)
         self.clip_tokenizer = load_clip_tokenizer(clip_path, clip_text_cleanup)

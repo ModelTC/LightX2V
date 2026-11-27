@@ -49,9 +49,10 @@ class Qwen3TextInfer:
 
 def encode_text(w, texts):
     batch = w.tokenizer([w.format(t) for t in texts], truncation=True, max_length=128 + w.crop_start, padding="max_length", return_attention_mask=True, return_tensors="pt")
-    ids, mask = batch.input_ids.cuda(), batch.attention_mask.cuda()
+    device = next(iter(w.qwen.tensors.values())).device
+    ids, mask = batch.input_ids.to(device), batch.attention_mask.to(device)
     context = w.qwen_infer.infer(w.qwen, ids, mask)[:, w.crop_start : w.crop_start + 128].contiguous()
     lengths = (mask.sum(-1) - w.crop_start).clamp(min=0, max=128)
     clip_batch = w.clip_tokenizer(texts, truncation=True, max_length=77, padding=True, return_tensors="pt")
-    _, pooled = w.clip_infer.infer(w.clip, clip_batch.input_ids.cuda())
+    _, pooled = w.clip_infer.infer(w.clip, clip_batch.input_ids.to(device))
     return pooled.unsqueeze(1), context, lengths

@@ -16,7 +16,7 @@ class HYMotionRunner(BaseRunner):
         return ".npz"
 
     def init_modules(self):
-        validate_a100_config(self.config)
+        self.device = validate_a100_config(self.config)
         self.model = HYMotionModel(self.config)
 
     @torch.inference_mode()
