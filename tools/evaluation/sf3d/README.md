@@ -150,3 +150,26 @@ Complete Ascend 910B2C BF16 measurement (original FP32 scopes retained):
 [Full results, measured revisions and evidence fingerprints](results/ascend_npu/bf16/full-results.json) include every formal input’s latency and output SHA. Independent verification checks complete coverage, output hashes, original metric aggregation, NPU process attribution and cleanup. Raw artifacts and device observations remain outside git. No native equality or A100 latency ratio is claimed.
 
 <!-- /ascend-full-results-20261127 -->
+
+
+### MLU host resource evidence
+
+Run `scripts/platform/mlu/run_observed.sh` on the host with Docker and cnmon.
+Pass `--dataset`, `--paths /absolute/host-paths.json`, `--output`, `--card`, and
+optionally `--image`. `--smoke` selects a declared partial fixture; it never
+claims full dataset completion. `--smoke --skip-score` checks one generation
+request only. Full runs retain the frozen dataset, request and scoring code.
+
+The paths file uses host absolute paths visible unchanged in the worker. Add
+`output_root` and `mounts`, a map of absolute host directories to `ro`/`rw`;
+mount source/data read-only and the chosen output root writable. `python` names
+the interpreter inside the image. Build the MLU inference environment described
+in the inference PR; SF3D requires its full CPU UV/texture extensions.
+
+The host cnmon observer records card UUID/PCI identity, host PID/start-tick
+ancestry and bounded queries. A held worker allows a post-workload observation;
+the controller checks the closed capture and task cleanup before accepting an
+interval. Missing/unknown inventory, partitions, foreign PIDs and observation
+gaps reject resource evidence. The local legacy MLU entry remains a measurement
+without this resource isolation claim. Native comparison is still a separately
+tracked capability; no BF16-versus-native exact equality is inferred.
