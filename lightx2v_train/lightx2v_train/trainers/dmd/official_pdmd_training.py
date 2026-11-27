@@ -62,7 +62,7 @@ def validate_official_pdmd_config(config):
         data = config["data"]["train"]
         legacy = data.get("name") == "minimax_h3_cache_dataset" and data.get("route_mode") == "stratified"
         curriculum = data.get("name") == "minimax_h3_curriculum_cache_dataset" and data.get("kind") == "fl2av"
-        if not (legacy or curriculum):
+        if not (legacy or curriculum or data.get("name") == "h3_selfgen_manifest"):
             raise ValueError("official_pdmd base/keyframe tasks require a stratified H3 cache or an FL2AV new-then-old curriculum cache")
     elif config["data"]["train"].get("name") == "minimax_h3_curriculum_cache_dataset" and config["data"]["train"].get("kind") != "ref2av":
         raise ValueError("official_pdmd Ref2AV requires kind=ref2av for a curriculum cache")
@@ -117,7 +117,8 @@ class OfficialH3PdmdTraining:
         self.gan = None
         self.gan_real_stream = None
         validate_official_pdmd_config(trainer.config)
-        if self.dmd.get("gan", {}).get("enabled", False):
+        self.paired_manifest = trainer.config["data"]["train"].get("name") == "h3_selfgen_manifest"
+        if self.dmd.get("gan", {}).get("enabled", False) and not self.paired_manifest:
             from .dmd2_gan_data import DMD2GanRealStream
 
             model_name = trainer.config["model"]["name"]
@@ -144,6 +145,8 @@ class OfficialH3PdmdTraining:
                 digest.update(json.dumps(record, sort_keys=True, ensure_ascii=False, separators=(",", ":"), default=str).encode("utf-8"))
                 digest.update(b"\n")
             recipe["dataset"] = {"rows": len(dataset), "sha256": digest.hexdigest()}
+        if self.paired_manifest:
+            recipe["manifest_sha256"] = self.trainer.dataloader_train.dataset.digest
         if self.gan_real_stream is not None:
             recipe["gan_real_data"] = self.gan_real_stream.recipe()
             samples = self.trainer.dataloader_train.dataset.samples
@@ -306,7 +309,8 @@ class OfficialH3PdmdTraining:
             if role == "student":
                 trajectory = self.cached[micro]
             else:
-                trajectory = self._trajectory(next(samples), iteration, slot)
+                sample = next(samples)
+                trajectory = self._trajectory(sample, iteration, slot)
                 self.consumed_microbatches += 1
             set_sync(micro == self.accum - 1)
             draws = torch.Generator().manual_seed(stream_seed(self.seed, "draws", iteration, slot))
@@ -366,6 +370,7 @@ class OfficialH3PdmdTraining:
                         iteration,
                         slot,
                         route_scale / self.accum,
+                        real_sample=sample,
                     )
                     loss_value += route_scale * gan_value
                     metrics.update(gan_metrics)
@@ -374,12 +379,13 @@ class OfficialH3PdmdTraining:
                 totals[name] = totals.get(name, 0.0) + value / self.accum
             del loss, trajectory
         t._sync_sequence_parallel_grads(params)
+        max_norm = float("inf") if t.max_grad_norm == 0 else t.max_grad_norm
         if role == "fake" and self.gan is not None:
             from .dmd2_gan_head import clip_dmd2_gan_grad_norm
 
-            norm = clip_dmd2_gan_grad_norm(t, t.max_grad_norm)
+            norm = clip_dmd2_gan_grad_norm(t, max_norm)
         else:
-            norm = torch.nn.utils.clip_grad_norm_(params, t.max_grad_norm)
+            norm = torch.nn.utils.clip_grad_norm_(params, max_norm)
         if hasattr(norm, "full_tensor"):
             norm = norm.full_tensor()
         finite = torch.isfinite(norm).to(device=t.student.device, dtype=torch.int32)
@@ -453,16 +459,20 @@ class OfficialH3PdmdTraining:
         # phase before restoring metadata, then advance before the next update.
         self._set_rollout_schedule(max(0, iteration - 1))
         t.setup(resume_ckpt_path=checkpoint)
-        if self.gan_real_stream is not None:
-            from .dmd2_gan import Dmd2GanObjective
+        gan_objective = None
+        if self.dmd.get("gan", {}).get("enabled", False):
+            from .dmd2_gan import Dmd2GanObjective, SingleHeadDmadObjective
 
-            self.gan = Dmd2GanObjective(t, self.gan_real_stream)
+            objective = self.dmd["gan"].get("objective", "dmd2")
+            cls = SingleHeadDmadObjective if objective == "dmad_single_head" else Dmd2GanObjective
+            gan_objective = cls(t, self.gan_real_stream)
             logger.info(
-                "[pdmd_official][gan] DMD2 logistic losses, shared fake backbone; G={} D={} student_recompute={} real_data={}",
-                self.gan.generator_weight,
-                self.gan.discriminator_weight,
+                "[pdmd_official][gan] objective={} shared fake backbone; G={} D={} student_recompute={} real_data={}",
+                objective,
+                gan_objective.generator_weight,
+                gan_objective.discriminator_weight,
                 self.dmd["gan"].get("student_recompute", False),
-                self.gan_real_stream.recipe(),
+                "same manifest row as rollout" if self.paired_manifest else self.gan_real_stream.recipe(),
             )
         self._validate_wan_residency()
         self.cached = move_tensors(self.cached, t.student.device)
@@ -490,6 +500,7 @@ class OfficialH3PdmdTraining:
         samples = t._iter_train_samples()
         last_saved = iteration if checkpoint is not None else -1
         while iteration < t.max_train_iters:
+            self.gan = gan_objective if iteration >= self.dmd.get("gan", {}).get("start_after_updates", 0) else None
             self._set_rollout_schedule(iteration)
             t.student.on_iteration_start(iteration)
             role, metrics = self._update(samples, iteration)

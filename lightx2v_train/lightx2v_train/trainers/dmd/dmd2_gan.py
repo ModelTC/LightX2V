@@ -24,7 +24,13 @@ def validate_gan_config(config):
         raise ValueError("DMD2 GAN requires official PDMD with minimax_h3_t2av, minimax_h3_ref2av or minimax_h3_image")
     if config["training"]["fake"]["train_type"] != "full":
         raise ValueError("DMD2 GAN trains the shared full fake-score backbone")
-    if not gan.get("real_cache"):
+    paired_manifest = config.get("data", {}).get("train", {}).get("name") == "h3_selfgen_manifest"
+    objective = gan.get("objective", "dmd2")
+    if objective not in {"dmd2", "dmad_single_head"}:
+        raise ValueError(f"Unknown GAN objective: {objective}")
+    if objective == "dmad_single_head" and not paired_manifest:
+        raise ValueError("Single-head DMAD uses a paired H3 audio-video manifest")
+    if not paired_manifest and not gan.get("real_cache"):
         raise ValueError("DMD2 GAN requires real_cache with clean target latents and their own conditions")
     for key, default in (("generator_weight", 0.005), ("discriminator_weight", 0.01)):
         value = float(gan.get(key, default))
@@ -33,7 +39,7 @@ def validate_gan_config(config):
     if not 0 < float(gan.get("sigma_max", 0.999)) < 1:
         raise ValueError("training.dmd.gan.sigma_max must be in (0, 1)")
     metadata_geometry = (
-        model["name"] == "minimax_h3_ref2av"
+        (model["name"] == "minimax_h3_ref2av" or paired_manifest)
         and model.get("capabilities", {}).get("distribution_matching", {}).get("geometry_from_metadata") is True
         and not dmd.get("generation_shapes")
     )
@@ -68,30 +74,43 @@ class Dmd2GanObjective:
         self.generator_weight = float(self.config.get("generator_weight", 0.005))
         self.discriminator_weight = float(self.config.get("discriminator_weight", 0.01))
 
-    def _logits(self, clean, condition, iteration, slot, branch):
+    def _sigmas(self, clean, iteration, slot, branch):
         t = self.trainer
         draws = torch.Generator().manual_seed(stream_seed(self.seed, "gan_sigma", branch, iteration, slot))
         image = torch.is_tensor(clean)
-        sigmas = gan_sigmas(draws, t.student.device, float(self.config.get("sigma_max", 0.999)), image=image)
+        return gan_sigmas(draws, t.student.device, float(self.config.get("sigma_max", 0.999)), image=image)
+
+    def _head(self, features, image):
+        return self.trainer.dmd2_gan_head(features["image" if image else "video"])
+
+    def _generator_loss(self, logits):
+        return generator_logistic_loss(logits)
+
+    def _logits(self, clean, condition, iteration, slot, branch):
+        t = self.trainer
+        sigmas = self._sigmas(clean, iteration, slot, branch)
         generator = torch.Generator(device=t.student.device).manual_seed(stream_seed(self.seed, "gan_noise", branch, iteration, slot))
         noise = joint_noise_like(clean, generator)
         query = t.student.add_noise(None, clean, noise, sigmas)
         features = t.fake.predict_dmad_features(query, sigmas, positive_condition(condition), feature_block=int(self.config.get("feature_block", 49)))
-        return t.dmd2_gan_head(features["image" if image else "video"]), sigmas.reshape(-1)[0]
+        return self._head(features, torch.is_tensor(clean)), sigmas.reshape(-1)[0]
 
     def generator(self, clean, condition, iteration, slot):
         """Caller freezes fake/head through backward, without disabling autograd."""
         logits, sigma = self._logits(clean, condition, iteration, slot, "generator")
-        raw = generator_logistic_loss(logits)
+        raw = self._generator_loss(logits)
         return self.generator_weight * raw, {"gan_g": raw.detach(), "gan_g_logit": logits.detach().mean(), "gan_g_sigma": sigma.detach()}
 
-    def backward_discriminator(self, trajectory, cursor, iteration, slot, backward_scale):
+    def backward_discriminator(self, trajectory, cursor, iteration, slot, backward_scale, *, real_sample=None):
         """Release each H3 graph before the next forward to limit peak memory."""
         t = self.trainer
         metrics = {}
         total = 0.0
         for real in (False, True):
-            if real:
+            if real and self.real_stream is None:
+                clean = t.student.extract_turbo_latents(real_sample, trajectory.states[-1].shape)
+                condition = trajectory.condition
+            elif real:
                 real_options = {}
                 if t.config.get("model", {}).get("name") == "minimax_h3_ref2av":
                     shape = trajectory.states[-1].shape
@@ -112,3 +131,21 @@ class Dmd2GanObjective:
             metrics[f"gan_d_{branch}_sigma"] = float(sigma)
             del clean, condition, logits, raw, weighted
         return total, metrics
+
+class SingleHeadDmadObjective(Dmd2GanObjective):
+    """One teacher-positive classifier, sharing the PDMD fake-score backbone."""
+
+    def _sigmas(self, clean, iteration, slot, branch):
+        from .rollout_schedule import rollout_shifts
+
+        # Both discriminator examples use the same time, with independent noise.
+        draws = torch.Generator().manual_seed(stream_seed(self.seed, "dmad_sigma", iteration, slot))
+        base = torch.empty(()).uniform_(0.02, 0.98, generator=draws)
+        shifts = torch.tensor(rollout_shifts(self.trainer.dmd_config, iteration))
+        return (shifts * base / (1 + (shifts - 1) * base)).to(self.trainer.student.device)
+
+    def _head(self, features, image):
+        return self.trainer.dmd2_gan_head(features["video"], features["audio"])
+
+    def _generator_loss(self, logits):
+        return -logits.float().mean()

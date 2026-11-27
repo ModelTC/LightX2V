@@ -106,3 +106,47 @@ class GanPDMDTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_single_teacher_head_first_critic_and_student_update():
+    from lightx2v_train.trainers.dmd.dmad_math import SingleHeadCritic
+    from lightx2v_train.trainers.dmd.dmd2_gan import SingleHeadDmadObjective
+
+    fixture = GanPDMDTest()
+    fixture.setUp()
+    t = fixture.t
+    t.dmd_config.update(official_rollout_video_shift=12, official_rollout_audio_shift=3)
+    t.dmd_config["gan"].update(student_recompute=True, objective="dmad_single_head")
+    t.max_grad_norm = 0
+    t.dmd2_gan_head = SingleHeadCritic(3)
+    t.dmd2_gan_trainable_params = list(t.dmd2_gan_head.parameters())
+    t.dmd2_gan_optimizer = torch.optim.AdamW(t.dmd2_gan_trainable_params, lr=0.00004, betas=(0.0, 0.99), weight_decay=0.01)
+    t.dmd2_gan_lr_scheduler = torch.optim.lr_scheduler.LambdaLR(t.dmd2_gan_optimizer, lambda _: 1)
+
+    def features(x, sigma, condition, feature_block):
+        output = fixture.roles.denoisers["fake"](x, sigma, condition)
+        return {"video": output.video, "audio": torch.nn.functional.pad(output.audio, (0, 1))}
+
+    t.fake.predict_dmad_features = features
+    target = fixture.trajectory.states[-1]
+    t.student.extract_turbo_latents = Mock(return_value=target)
+    sample = {"row": "paired"}
+    engine = OfficialH3PdmdTraining.__new__(OfficialH3PdmdTraining)
+    engine.trainer, engine.dmd = t, t.dmd_config
+    engine.gan = SingleHeadDmadObjective(t, None)
+    engine.critic_steps, engine.accum, engine.seed = 1, 1, 17
+    engine.cached, engine.consumed_microbatches = [], 0
+    engine.route_loss_scale = lambda _: 1.0
+    engine._trajectory = lambda sample, iteration, slot: fixture.trajectory
+    sigmas = engine.gan._sigmas(target, 0, 0, "real")
+    torch.testing.assert_close(sigmas, engine.gan._sigmas(target, 0, 0, "fake"))
+    assert sigmas[0] > sigmas[1]
+    before = [p.detach().clone() for p in t.dmd2_gan_trainable_params]
+    role, metrics = engine._update(iter([sample]), 0)
+    assert role == "fake" and metrics["gan_d_real_sigma"] == metrics["gan_d_fake_sigma"]
+    assert any(not torch.equal(a, b) for a, b in zip(before, t.dmd2_gan_trainable_params))
+    t.student.extract_turbo_latents.assert_called_once_with(sample, target.shape)
+    student_before = t.trainable_params[0].detach().clone()
+    role, metrics = engine._update(iter(()), 1)
+    assert role == "student" and metrics["gan_g"] == -metrics["gan_g_logit"]
+    assert "pdmd_loss" in metrics and not torch.equal(student_before, t.trainable_params[0])

@@ -61,20 +61,42 @@ class DmadConfig:
         return asdict(self)
 
 
+def binary_token_head(dim):
+    return nn.Sequential(nn.Linear(dim, dim), nn.SiLU(), nn.Linear(dim, 1))
+
+
+def normalized_features(tokens, eps):
+    tokens = tokens.float()
+    return tokens * torch.rsqrt(tokens.square().mean(-1, keepdim=True) + eps)
+
+
+class SingleHeadCritic(nn.Module):
+    """Score the paired teacher example with equal weight for each modality."""
+
+    def __init__(self, dim):
+        super().__init__()
+        self.teacher = binary_token_head(dim)
+
+    def forward(self, video, audio):
+        with torch.autocast(device_type=video.device.type, enabled=False):
+            v = self.teacher(normalized_features(video, 1e-5)).mean(1)
+            a = self.teacher(normalized_features(audio, 1e-5)).mean(1)
+        return ((v + a) / 2).squeeze(-1)
+
+
 class DualHeadCritic(nn.Module):
     """FP32 real/teacher logits; equal audio/video weighting, target tokens only."""
 
     def __init__(self, dim, eps=1e-5):
         super().__init__()
         self.eps = eps
-        self.real = nn.Sequential(nn.Linear(dim, dim), nn.SiLU(), nn.Linear(dim, 1))
-        self.teacher = nn.Sequential(nn.Linear(dim, dim), nn.SiLU(), nn.Linear(dim, 1))
+        self.real = binary_token_head(dim)
+        self.teacher = binary_token_head(dim)
 
     def _logits(self, tokens):
         if tokens.ndim != 3 or tokens.shape[1] == 0:
             raise ValueError("DMAD heads require nonempty [B, target_tokens, hidden] features.")
-        tokens = tokens.float()
-        tokens = tokens * torch.rsqrt(tokens.square().mean(-1, keepdim=True) + self.eps)
+        tokens = normalized_features(tokens, self.eps)
         return self.real(tokens).mean(1).squeeze(-1), self.teacher(tokens).mean(1).squeeze(-1)
 
     def forward(self, video_features, audio_features):

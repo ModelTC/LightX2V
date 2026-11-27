@@ -83,3 +83,36 @@ def load_media(path, record):
         raise ValueError(f"Audio does not cover the video timeline: {path}")
     video = torch.from_numpy(pixels).permute(3, 0, 1, 2).unsqueeze(0).contiguous()
     return video, torch.from_numpy(waveform)
+
+
+class ManifestAVDataset(PromptDataset):
+    def __init__(self, path, seed, negative_dir):
+        from lightx2v_train.data.h3_selfgen_manifest import read_pools
+
+        _, self.records, _ = read_pools(path)
+        self.seed, self.epoch, self.order = seed, -1, []
+        self.negative_dir = Path(negative_dir)
+
+    @staticmethod
+    def negative_name(row):
+        return "empty-text.pt" if row["task"] == "t2av" else row["sample_id"] + ".pt"
+
+    def negative(self, index):
+        path = self.negative_dir / self.negative_name(self.records[index])
+        return torch.load(path, map_location="cpu", weights_only=True)
+
+    def load(self, index, device):
+        from lightx2v_train.data.h3_selfgen_manifest import load_positive
+        from lightx2v_train.model_zoo.native.minimax_h3.packing import patchify_video_latents
+
+        row = self.records[index]
+        payloads = {}
+        for name in ("video", "audio"):
+            data = torch.load(row[f"teacher_{name}_latent"], map_location="cpu", weights_only=True)
+            tensor = data["latents"] if isinstance(data, dict) else data
+            payloads[name] = tensor.to(device)
+        video = payloads["video"]
+        if video.ndim == 4:
+            video = video.unsqueeze(0)
+        audio = payloads["audio"].reshape(2, 32, -1).transpose(1, 2)
+        return load_positive(row), {"video": patchify_video_latents(video).unsqueeze(0), "audio": audio.reshape(1, -1, 32)}

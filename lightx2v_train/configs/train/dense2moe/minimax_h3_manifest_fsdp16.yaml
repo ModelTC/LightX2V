@@ -1,0 +1,54 @@
+# FFN-only Dense2MoE adapted to H3 SwiGLU. No MoB, step distillation, or LoRA.
+# PDMD fake-score precision: FP32 student masters/AdamW, BF16 FSDP compute,
+# FP32 gradient reduction. Teacher and resident inference use BF16 + FA3.
+model_path: ${oc.env:H3_MODEL_PATH}
+condition_model_path: ${oc.env:H3_TEXT_MODEL_PATH}
+prompts: ${oc.env:H3_MANIFEST}
+negative_dir: ${output_dir}/negative_conditions
+output_dir: ${oc.env:H3_MOE_OUTPUT}
+seed: 42
+attention_backend: _flash_3_hub
+attention_kernel_path: ${oc.env:H3_FA3_KERNEL,''}
+# Each prompt supplies its own height, width and frame count from metadata.
+flow_shift:
+  video: 12.0
+  audio: 3.0
+loss_weights:
+  video: 1.0
+  audio: 1.0
+learning_rate: 0.00005
+router_learning_rate: 0.0001
+warmup_steps: 100
+min_lr_ratio: 0.2
+weight_decay: 0.01
+max_grad_norm: 1.0
+feature_loss: relative
+feature_weight: 0.1
+# Conservative supervised auxiliary; teacher KD remains the primary objective.
+flow_stages: [moe]
+training_cfg_scale: 3.0
+flow_weight: 0.1
+uniform_video_sigma_probability: 0.5
+balance_weight: 0.01
+save_every: 100
+save_limit: 2
+iterations:
+  calibrate: 256
+  shared: 5000
+  moe: 120000
+moe:
+  layer_range: [3, 50]
+  shared_fraction: 0.25
+  train_shared: true
+  experts: 12
+  top_k: 2
+benchmark:
+  prompt_index: 8559
+  warmup: 3
+  repeats: 10
+
+validation:
+  every: 500
+  indices: [0, 2000, 4000, 6000]
+  seed: 12345
+  base_sigmas: [0.03, 0.2, 0.7]

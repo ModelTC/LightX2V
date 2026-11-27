@@ -7,6 +7,7 @@ import torch.distributed as dist
 from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
 
 from lightx2v_train.model_zoo.native.minimax_h3 import (
+    KEYFRAME_NOISE_AUG,
     audio_latent_num_frames,
     build_packed_sequence,
     build_row_timesteps,
@@ -69,18 +70,27 @@ def load_model(config, stage="dense", permutations=None, shared_state=None, shar
 
 
 class AVSample:
-    def __init__(self, condition, record, device):
+    def __init__(self, condition, record, device, *, keyframe=None):
         frames = video_latent_num_frames(record["num_frames"])
-        layout = build_packed_sequence(condition["text_token_tags"], frames, record["height"] // 16, record["width"] // 16, audio_latent_num_frames(record["num_frames"]))
+        anchors = ("first",) if record.get("task") == "i2av" else ()
+        height, width = record["height"] // 16, record["width"] // 16
+        layout = build_packed_sequence(condition["text_token_tags"], frames, height, width, audio_latent_num_frames(record["num_frames"]), keyframe_anchors=anchors)
+        self.keyframe = keyframe
+        if anchors and keyframe is None:
+            from lightx2v_train.model_zoo.native.minimax_h3.packing import keyframe_condition_noise
+
+            rows = condition["condition_video_latents"].reshape(1, -1, 96).to(device=device, dtype=torch.float32)
+            noise = keyframe_condition_noise(((1, height, width),), (1, 2, 2), 24, device=device)
+            self.keyframe = KEYFRAME_NOISE_AUG * rows + (1 - KEYFRAME_NOISE_AUG) * noise
         self.layout = layout.to(device)
-        self.condition = condition["prompt_embeds"].detach().clone()
-        self.shapes = {"video": (1, len(layout.video_indices), 96), "audio": (1, len(layout.audio_indices), 32)}
+        self.condition = condition["prompt_embeds"].to(device).reshape(1, -1, condition["prompt_embeds"].shape[-1]).detach().clone()
+        self.shapes = {"video": (1, len(layout.video_indices) - layout.num_condition_video_rows, 96), "audio": (1, len(layout.audio_indices), 32)}
 
     def forward(self, model, latents, sigmas):
         times, indices = build_row_timesteps(self.layout, sigmas["video"], sigmas["audio"])
         layout = self.layout
         video, audio = model(
-            hidden_states=latents["video"],
+            hidden_states=latents["video"] if self.keyframe is None else torch.cat((self.keyframe, latents["video"]), dim=1),
             audio_hidden_states=latents["audio"],
             encoder_hidden_states=self.condition,
             timestep=times.to(latents["video"].device),
@@ -92,6 +102,8 @@ class AVSample:
             text_indices=layout.text_indices,
             return_dict=False,
         )
+        if self.keyframe is not None:
+            video = video[:, layout.num_condition_video_rows:]
         return {"video": video, "audio": audio}
 
 

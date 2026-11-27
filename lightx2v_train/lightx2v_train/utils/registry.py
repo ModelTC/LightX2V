@@ -157,6 +157,8 @@ def _ensure_data_registered(data_name):
         import lightx2v_train.data.cache_dataset  # noqa: F401
     elif data_name == "minimax_h3_image_cache_dataset":
         import lightx2v_train.data.minimax_h3_image_cache_dataset  # noqa: F401
+    elif data_name == "h3_selfgen_manifest":
+        import lightx2v_train.data.h3_selfgen_manifest  # noqa: F401
     elif data_name in {"minimax_h3_cache_dataset", "minimax_h3_ref_cache_dataset"}:
         import lightx2v_train.data.minimax_h3_cache_dataset  # noqa: F401
     elif data_name == "minimax_h3_dmad_dataset":

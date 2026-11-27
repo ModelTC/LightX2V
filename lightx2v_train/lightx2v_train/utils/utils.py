@@ -6,6 +6,7 @@ def is_train_cache_dataset(config):
         "cache_dataset",
         "minimax_h3_image_cache_dataset",
         "minimax_h3_cache_dataset",
+        "h3_selfgen_manifest",
         "minimax_h3_ref_cache_dataset",
         "minimax_h3_dmad_dataset",
         "minimax_h3_turbo_cm_dataset",

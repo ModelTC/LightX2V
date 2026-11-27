@@ -65,7 +65,14 @@ def setup_dmd2_gan_head(trainer):
     # every rank. Broadcast also protects against process-local RNG differences.
     with torch.random.fork_rng(devices=[]):
         torch.random.default_generator.manual_seed(int(trainer.config.get("seed", 42)) + 20903)
-        head = H3GanHead(width, options.get("head_hidden_dim", 1024), options.get("head_token_bins", options.get("head_temporal_bins", 4)))
+        if options.get("objective") == "dmad_single_head":
+            from .dmad_math import SingleHeadCritic
+
+            head = SingleHeadCritic(width)
+            head_name = "dmad_single_av"
+        else:
+            head_name = "fp32_target_image_ordered_pool_mlp" if trainer.config.get("model", {}).get("name") == "minimax_h3_image" else "fp32_target_video_ordered_pool_mlp"
+            head = H3GanHead(width, options.get("head_hidden_dim", 1024), options.get("head_token_bins", options.get("head_temporal_bins", 4)))
     trainer.dmd2_gan_head = head.to(device=trainer.student.device, dtype=torch.float32).eval()
     if dist.is_initialized():
         for value in head.state_dict().values():
@@ -89,7 +96,7 @@ def setup_dmd2_gan_head(trainer):
     )
     trainer.dmd2_gan_metadata = {
         "version": 1,
-        "head": "fp32_target_image_ordered_pool_mlp" if trainer.config.get("model", {}).get("name") == "minimax_h3_image" else "fp32_target_video_ordered_pool_mlp",
+        "head": head_name,
         "feature_dim": width,
         "options": copy.deepcopy(options),
     }
