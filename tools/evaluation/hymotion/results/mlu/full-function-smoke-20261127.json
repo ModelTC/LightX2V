@@ -1,0 +1,222 @@
+{
+  "model": "hymotion",
+  "platform": "MLU590",
+  "scope": "one_input_functional_smoke",
+  "full_dataset_rerun": false,
+  "measurements": {
+    "lightx2v": {
+      "count": 1,
+      "fixture_id": "00000",
+      "physical_card": 3,
+      "mean_request_latency_s": 5.248949419008568,
+      "artifact_sha256": "9de9144cf1f57d5dc160fdc8f96a599d45d26929b5ed16b6e4bc39dd3f6ec34f",
+      "measurement_worker_sha256": "ad2010e12cd5bca32a8c13c175ee8432dd1172dda8eafec67dc8e3a9fe418753",
+      "source_lock": {
+        "lightx2v": {
+          "repository": "https://github.com/ModelTC/LightX2V.git",
+          "revision": "20b921abf707fca620e83c28f72ab7fe31898ce1",
+          "pull_request": 1752
+        },
+        "native": {
+          "repository": "https://github.com/Tencent-Hunyuan/HY-Motion-1.0.git",
+          "revision": "4e426f5a1021cbcf7f375458c37b840ee7225229"
+        },
+        "momask": {
+          "repo": "EricGuo5513/momask-codes",
+          "revision": "94a6636c9c463b7a9414c3401a6f1b67e6c51824",
+          "files": [
+            {
+              "path": "models/t2m_eval_wrapper.py",
+              "sha256": "b03398ef2ee0087076a6e0cbe6317ba1548c23b1d58e03988d2a98a25de49692"
+            },
+            {
+              "path": "models/t2m_eval_modules.py",
+              "sha256": "6d4b069e06448828cbe8b4da609f6b0a186ec180a24b5b2e89098c2bb027e5fc"
+            },
+            {
+              "path": "utils/metrics.py",
+              "sha256": "83f8ecb93df83aafb708280c062973893f1a2565418f2abf961064d7cfca49d7",
+              "runtime_sha256": "2cc8f0f6871d31b03c33a9f10b6fcd90f5989763a269aac9dde07dd19ce16544",
+              "patch": "Clamp roundoff-induced negative squared Euclidean distances to zero before sqrt"
+            },
+            {
+              "path": "utils/word_vectorizer.py",
+              "sha256": "fbfb56d795f2b1ddb99bbf60a097a600a3dfd2275cc541b1dce0a57df787bbdf"
+            },
+            {
+              "path": "utils/motion_process.py",
+              "sha256": "ae517a71091a159392383de5460c5097a7469c1ba65c223edad91f94f7f11f29",
+              "runtime_sha256": "770bc215e49aa9396a29ae1de448c214ea17521d12f6daefbfe7ac8b52d9d09c",
+              "patch": "Replace removed numpy np.float alias with np.float64"
+            },
+            {
+              "path": "utils/paramUtil.py",
+              "sha256": "ec119ad7e3ab3bf17a49c582131a05a7bbf93c6d1d46e478b8c564941b5910e7"
+            },
+            {
+              "path": "common/skeleton.py",
+              "sha256": "6f6191dd105bc32ee417dafc6a2d463dc4a7fe9a1d6181250a924382af8659b1"
+            },
+            {
+              "path": "common/quaternion.py",
+              "sha256": "ae2e3d090eb39342bdcd0bdae7183bab3159bc100eea5725680dd25032f78c25",
+              "runtime_sha256": "17e96bb3af31952183453d4dc15f11f88bb940342f532f3860012aeecf1f85ad",
+              "patch": "Replace removed numpy np.float alias with np.float64"
+            },
+            {
+              "path": "utils/get_opt.py",
+              "sha256": "87addb92b0bb3b91f0bc02bff27b4105a218229be7cea55cce6526eba49cc37a"
+            },
+            {
+              "path": "prepare/download_evaluator.sh",
+              "sha256": "6c8653ab0a1e8d79949c02d10068124581a01a7d38162661a90f795629fffd30"
+            },
+            {
+              "path": "prepare/download_glove.sh",
+              "sha256": "3695a92054fd2f8451e49c5835b6b575fd07ed423d3c9abc20bdc609be357119"
+            }
+          ],
+          "data_loader_reference_sha256": "fcbc8e7b0079e17ef7573b6a70d5487e4b4f692632caebb506f6c28ea3e3b70c"
+        }
+      },
+      "environment": {
+        "versions": {
+          "torch": "2.9.1+cpu",
+          "transformers": "4.53.3",
+          "tokenizers": "0.21.4",
+          "ftfy": "6.3.1",
+          "diffusers": "0.36.0",
+          "numpy": "1.26.4",
+          "Pillow": "13.0.0",
+          "trimesh": "4.4.1",
+          "rembg": "2.0.57",
+          "scipy": "1.15.3"
+        },
+        "platform": "cambricon_mlu",
+        "device": "MLU590-M9D",
+        "physical_card": "3",
+        "torch_mlu": "1.31.1+torch2.9.1",
+        "deterministic": false
+      },
+      "resources_clear": true,
+      "task_cleanup_verified": true,
+      "resource_receipt_sha256": "f3b49bcca9015c5fbefa764ba99bf774a9287b94cbe62f3a3567b47e9a5f28a5"
+    },
+    "native": {
+      "count": 1,
+      "fixture_id": "00000",
+      "physical_card": 3,
+      "mean_request_latency_s": 4.427606490906328,
+      "artifact_sha256": "8067fca601ad7a4f9fdf5901baa8e678f2dd8f6d60e04eb3799748b542511e9f",
+      "measurement_worker_sha256": "be3c956b76c3bee4b4daf6ec801dcd896a3e8c3923346e5480cd94a5beda6202",
+      "source_lock": {
+        "lightx2v": {
+          "repository": "https://github.com/ModelTC/LightX2V.git",
+          "revision": "20b921abf707fca620e83c28f72ab7fe31898ce1",
+          "pull_request": 1752
+        },
+        "native": {
+          "repository": "https://github.com/Tencent-Hunyuan/HY-Motion-1.0.git",
+          "revision": "4e426f5a1021cbcf7f375458c37b840ee7225229",
+          "mlu_patches": [
+            {
+              "path": "hymotion/utils/type_converter.py",
+              "sha256": "abb336b4c1cca2aca61180ae206bd766a9b1e5a039688d231956e2faba967f2e",
+              "runtime_sha256": "00236bd4ce7d045d2aa494a09fbb9f8d9c80eddcef4adb1710eca52b0625d639",
+              "replacements": [
+                {
+                  "before": "    if next(module.parameters()).is_cuda:",
+                  "after": "    if next(module.parameters()).device.type == \"mlu\":\n        return next(module.parameters()).device\n\n    if next(module.parameters()).is_cuda:"
+                }
+              ]
+            }
+          ]
+        },
+        "momask": {
+          "repo": "EricGuo5513/momask-codes",
+          "revision": "94a6636c9c463b7a9414c3401a6f1b67e6c51824",
+          "files": [
+            {
+              "path": "models/t2m_eval_wrapper.py",
+              "sha256": "b03398ef2ee0087076a6e0cbe6317ba1548c23b1d58e03988d2a98a25de49692"
+            },
+            {
+              "path": "models/t2m_eval_modules.py",
+              "sha256": "6d4b069e06448828cbe8b4da609f6b0a186ec180a24b5b2e89098c2bb027e5fc"
+            },
+            {
+              "path": "utils/metrics.py",
+              "sha256": "83f8ecb93df83aafb708280c062973893f1a2565418f2abf961064d7cfca49d7",
+              "runtime_sha256": "2cc8f0f6871d31b03c33a9f10b6fcd90f5989763a269aac9dde07dd19ce16544",
+              "patch": "Clamp roundoff-induced negative squared Euclidean distances to zero before sqrt"
+            },
+            {
+              "path": "utils/word_vectorizer.py",
+              "sha256": "fbfb56d795f2b1ddb99bbf60a097a600a3dfd2275cc541b1dce0a57df787bbdf"
+            },
+            {
+              "path": "utils/motion_process.py",
+              "sha256": "ae517a71091a159392383de5460c5097a7469c1ba65c223edad91f94f7f11f29",
+              "runtime_sha256": "770bc215e49aa9396a29ae1de448c214ea17521d12f6daefbfe7ac8b52d9d09c",
+              "patch": "Replace removed numpy np.float alias with np.float64"
+            },
+            {
+              "path": "utils/paramUtil.py",
+              "sha256": "ec119ad7e3ab3bf17a49c582131a05a7bbf93c6d1d46e478b8c564941b5910e7"
+            },
+            {
+              "path": "common/skeleton.py",
+              "sha256": "6f6191dd105bc32ee417dafc6a2d463dc4a7fe9a1d6181250a924382af8659b1"
+            },
+            {
+              "path": "common/quaternion.py",
+              "sha256": "ae2e3d090eb39342bdcd0bdae7183bab3159bc100eea5725680dd25032f78c25",
+              "runtime_sha256": "17e96bb3af31952183453d4dc15f11f88bb940342f532f3860012aeecf1f85ad",
+              "patch": "Replace removed numpy np.float alias with np.float64"
+            },
+            {
+              "path": "utils/get_opt.py",
+              "sha256": "87addb92b0bb3b91f0bc02bff27b4105a218229be7cea55cce6526eba49cc37a"
+            },
+            {
+              "path": "prepare/download_evaluator.sh",
+              "sha256": "6c8653ab0a1e8d79949c02d10068124581a01a7d38162661a90f795629fffd30"
+            },
+            {
+              "path": "prepare/download_glove.sh",
+              "sha256": "3695a92054fd2f8451e49c5835b6b575fd07ed423d3c9abc20bdc609be357119"
+            }
+          ],
+          "data_loader_reference_sha256": "fcbc8e7b0079e17ef7573b6a70d5487e4b4f692632caebb506f6c28ea3e3b70c"
+        }
+      },
+      "environment": {
+        "versions": {
+          "torch": "2.9.1+cpu",
+          "transformers": "4.53.3",
+          "tokenizers": "0.21.4",
+          "ftfy": "6.3.1",
+          "diffusers": "0.36.0",
+          "numpy": "1.26.4",
+          "Pillow": "13.0.0",
+          "trimesh": "4.4.1",
+          "rembg": "2.0.57",
+          "scipy": "1.15.3"
+        },
+        "platform": "cambricon_mlu",
+        "device": "MLU590-M9D",
+        "physical_card": "3",
+        "torch_mlu": "1.31.1+torch2.9.1",
+        "deterministic": false
+      },
+      "resources_clear": true,
+      "task_cleanup_verified": true,
+      "resource_receipt_sha256": "728751f102612802290d84f15853ac74c2c827326141dbaa4641e415b958e77c"
+    }
+  },
+  "limitations": [
+    "No new full-dataset accuracy or latency result",
+    "Native precision and PR BF16 are separate precision experiments",
+    "Other platform code inspected statically; no other-platform hardware run in this task"
+  ]
+}
