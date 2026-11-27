@@ -1,0 +1,15 @@
+# Build a metric image from the corresponding inference PR's MetaX image.
+ARG INFERENCE_IMAGE
+FROM ${INFERENCE_IMAGE}
+COPY tools/evaluation/sdxl/configs/metax/requirements.txt /tmp/metax-metrics-requirements.txt
+RUN python3 -m pip install -r /tmp/metax-metrics-requirements.txt
+ENV LD_PRELOAD=/opt/maca/mxgpu_llvm/lib/libmxomp.so
+# The FP32 metric network uses PyTorch SDPA and MMCV's reference attention.
+RUN python3 -m pip uninstall -y flash-attn
+COPY tools/evaluation/sdxl/scripts/platform/metax/build_cpu_extension.py /tmp/build_cpu_extension.py
+RUN python3 -m pip download --no-deps --no-build-isolation --no-binary=:all: --dest /tmp mmcv-full==1.7.2 \
+    && tar -xzf /tmp/mmcv-full-1.7.2.tar.gz -C /tmp \
+    && cd /tmp/mmcv-full-1.7.2 \
+    && CUDA_VISIBLE_DEVICES=-1 MACA_VISIBLE_DEVICES=-1 MMCV_WITH_OPS=1 MAX_JOBS=2 python3 /tmp/build_cpu_extension.py \
+    && python3 -m pip install --no-deps dist/*.whl \
+    && rm -rf /tmp/mmcv-full-1.7.2 /tmp/mmcv-full-1.7.2.tar.gz /tmp/build_cpu_extension.py

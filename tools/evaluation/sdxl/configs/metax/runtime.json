@@ -1,4 +1,38 @@
 {
-  "status": "not_implemented",
-  "reason": "Requires device-specific runtime and original-project baseline validation."
+  "status": "implemented",
+  "device_api": "torch.cuda",
+  "single_gpu": true,
+  "batch_size": 1,
+  "seed": 42,
+  "chunk_size_max": 256,
+  "execution_timeout_seconds": 3300,
+  "resource_monitor": "pinned LightX2V tools/runtime/gpu_watch.py",
+  "native_and_lightx2v": "serial on the same physical GPU",
+  "mean_latency_ratio_max": 1.25,
+  "p95_latency_ratio_max": 1.5,
+  "generation_environment": {
+    "OMP_NUM_THREADS": "8",
+    "MKL_NUM_THREADS": "8",
+    "OPENBLAS_NUM_THREADS": "1",
+    "CUBLAS_WORKSPACE_CONFIG": null
+  },
+  "precision_policy": {
+    "bf16": [
+      "both CLIP text encoders",
+      "UNet matrices, convolutions and attention"
+    ],
+    "fp32": [
+      "normalization",
+      "time frequencies",
+      "CFG and Euler state/update",
+      "VAE decoding"
+    ]
+  },
+  "campaign_mode": "LightX2V BF16 only; no native equality or relative-latency gate",
+  "target_device": "MetaX C500",
+  "image": "lightx2v-metax-native:20261127",
+  "idle_memory_mib_max": 900,
+  "resource_interval_s": 0.5,
+  "resource_query_timeout_s": 2.0,
+  "resource_max_gap_s": 3.0
 }

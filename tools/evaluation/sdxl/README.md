@@ -50,7 +50,7 @@ The comparison requires complete one-to-one coverage, verified resource isolatio
 
 `run.json`, per-sample JSONL, immutable final outputs and hashes, commands, environments, original-source pins, resource samples and PID/start-tick/task cleanup records are retained outside git. `quality.json`, `latency.json` and `comparison.json` are generated from checked complete coverage. Large artifacts, datasets, weights, upstream repositories and local absolute paths never enter this PR. Sanitized full-run summaries may be published under `results/nvidia/` only after actual validation. CPU tests: `python -m unittest discover -s "$EVAL/tests"`.
 
-NVIDIA A100 wiring is implemented. MLU, MetaX and Ascend NPU are explicit placeholders whose launchers exit 2; see PLATFORMS.md. No target-device results are inferred from A100.
+NVIDIA A100 wiring is implemented. MetaX C500 is documented below; see PLATFORMS.md for the other platform entries. No target-device results are inferred from A100.
 
 Resource completion uses an explicit worker/controller acknowledgement: after all work and outputs complete, the worker retains its PID until capture obtains a post-workload sample. Process/CUDA teardown then occurs with separate cleanup verification. This prevents disappearing /proc lineage at interpreter exit from being mistaken for a competing process; unknown lineage within the measured workload still fails. The acknowledgement wait is outside per-input end-to-end latency.
 
@@ -80,3 +80,24 @@ or cross-precision latency-ratio claim. Quality metric networks and dataset
 selection are unchanged; retained FP32 inference operations are recorded in
 `precision_policy`. `--backend` also selects a single backend in the default
 profile; omitting it preserves the original serial two-backend comparison.
+
+## MetaX C500
+
+The MetaX entry evaluates the pinned BF16 LightX2V adapter on GenEval (553), Parti (1,632) and the locked COCO fixture (5,000). It reuses the frozen manifests, model requests, quality functions and request timing boundary. Each dataset stays on one physical card.
+
+Run the controller on a host with Docker, `mx-smi` and a compatible C500 driver. Provision an inference image with the matching model PR's MetaX installer and install `configs/metax/requirements.txt` in its metric environment. The controller uses `--image` or the image in `configs/metax/runtime.json`. Copy `configs/metax/paths.json` to a local paths file and replace its absolute paths. Every container mount listed in `mounts` is read-only, with `output_root` mounted writable. Preserve the same absolute paths inside the containers.
+
+```bash
+PYTHON_BIN=python3 bash tools/evaluation/sdxl/scripts/platform/metax/run_eval.sh \
+  --paths /absolute/paths.local.json --dataset geneval \
+  --card 0 --output /absolute/results/new-run
+# Add --smoke in a separate directory to verify generation and actual scoring.
+```
+
+The resource observer runs as a non-root user in the host PID namespace, with a read-only filesystem and all capabilities dropped. It receives only its output directory, telemetry executable, driver library and read-only observation source. The host controller launches dedicated workers, collects before/after samples, acknowledges completion while the worker PID is alive, and verifies cleanup. Resource or coverage failures stop the campaign and preserve evidence. Resume accepts complete verified chunks with identical source, image, configuration, paths and card identity.
+
+The smoke plan uses one geometry/CLIPScore input, six GenEval prompts covering its six dimensions, or enough HumanML3D references for the unchanged 300-pair diversity metric. Smoke summaries explicitly retain the formal fixture count. Full summaries contain every frozen input, quality metrics, mean/median/P95 end-to-end latency, source/image fingerprints and resource evidence.
+
+GenEval uses the pinned official evaluator and weights with MMCV 1.7.2 CPU extensions. Its released `multi_scale_deformable_attn_pytorch` executes on MetaX tensors. The metric Dockerfile builds the released MMCV source against the installed MetaX PyTorch; an external MMCV source checkout is not required. A separate `metric_image` provides the FP32 Transformers CLIP evaluator through PyTorch SDPA. Both scoring backends retain their original metric definitions.
+
+Build the metric environment with `docker build --build-arg INFERENCE_IMAGE=<model-metax-image> -f tools/evaluation/sdxl/scripts/platform/metax/Dockerfile.metrics -t lightx2v-metax-metrics:20261127 .` and set `metric_image` in the local paths file. The image fixes the SDK OpenMP runtime for metric dependencies. GenEval additionally builds MMCV CPU extensions against that same MetaX PyTorch.

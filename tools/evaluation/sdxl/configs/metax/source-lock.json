@@ -1,3 +1,44 @@
 {
-  "status": "not_implemented"
+  "lightx2v": {
+    "repository": "https://github.com/LancelottJ/LightX2V.git",
+    "revision": "1488f17c12f80673f9266c88e20d80ca0d93bf4e",
+    "pull_request": 1754
+  },
+  "native": {
+    "package": "diffusers",
+    "version": "0.40.0",
+    "provision": "Install exact wheel from runtime-requirements-native.txt; source SHA recorded in execution manifest.",
+    "package_files": [
+      {
+        "path": "diffusers/pipelines/stable_diffusion_xl/pipeline_stable_diffusion_xl.py",
+        "sha256": "9a5a1d2dd98f38b0171a1bffd39d80e93bc1a8bdbeea5f36444f383c067d286b"
+      },
+      {
+        "path": "diffusers/models/unets/unet_2d_condition.py",
+        "sha256": "0976bd0b650b2d6889f78fd3c8776ba365bd1f193dec18f72bdafdbadf91fe50"
+      },
+      {
+        "path": "diffusers/models/autoencoders/autoencoder_kl.py",
+        "sha256": "091d72ea9ae2f45f465e70f05142e04850d1153052dca520291ceb707bda8c98"
+      },
+      {
+        "path": "diffusers/schedulers/scheduling_euler_discrete.py",
+        "sha256": "ecee4a110e09b91edf76715434afa60a1b34281c2e08166114f7be0a1facfa63"
+      }
+    ]
+  },
+  "geneval": {
+    "repo": "djghosh13/geneval",
+    "revision": "af4902f24d3ca90ebbb446dd9891a59e0f82725f",
+    "files": [
+      {
+        "path": "evaluation/evaluate_images.py",
+        "sha256": "c0fdeb8315f7d3ed72b56f466652afba5216f854109c6eeea339f9982474ea46"
+      },
+      {
+        "path": "evaluation/summary_scores.py",
+        "sha256": "302212beb80359b03fde980f4a71e76e44e41969bd917af6345310a715761aae"
+      }
+    ]
+  }
 }
