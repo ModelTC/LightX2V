@@ -1,4 +1,10 @@
 {
-  "status": "not_implemented",
-  "reason": "Requires device-specific runtime and original-project baseline validation."
+  "status": "smoke_ready",
+  "device_api": "torch.mlu",
+  "target_device": "MLU590",
+  "single_device": true,
+  "dtype": "BF16",
+  "batch_size": 1,
+  "seed": 42,
+  "texture_baking": "disabled on MLU because the pinned UV and texture extensions are CUDA-specific"
 }

@@ -1,3 +1,8 @@
 {
-  "status": "not_implemented"
+  "data": "/absolute/replace/data",
+  "weights": "/absolute/replace/weights",
+  "lightx2v": "/absolute/replace/lightx2v",
+  "python": "/absolute/replace/torch_mlu_python",
+  "tets": "/absolute/replace/160_tets.npz",
+  "rembg": "/absolute/replace/u2net"
 }

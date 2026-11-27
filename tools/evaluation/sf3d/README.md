@@ -1,5 +1,15 @@
 # sf3d original-project / LightX2V evaluation
 
+The MLU590 entry currently runs one frozen GSO input through pinned inference PR #1753 and checks that a finite geometry GLB is written. It is a functional smoke only. It does not run the native comparison, score quality, or produce latency evidence. The MLU path omits UV unwrap and texture baking because the pinned extensions are CUDA-specific.
+
+```bash
+cp tools/evaluation/sf3d/configs/mlu/paths.json tools/evaluation/sf3d/configs/mlu/paths.local.json
+# Replace the path placeholders, then run from the LightX2V repository root.
+PYTHON_BIN=/path/to/torch_mlu/python bash tools/evaluation/sf3d/scripts/platform/mlu/run_eval.sh \
+  --paths tools/evaluation/sf3d/configs/mlu/paths.local.json \
+  --output /absolute/new-smoke-directory
+```
+
 This developer-only package calls the pinned original implementation and inference PR from `configs/nvidia/source-lock.json`. It does not copy model networks or modify the user-facing inference API. Each implementation runs the full frozen dataset once at batch size one.
 
 ## Reproduce
