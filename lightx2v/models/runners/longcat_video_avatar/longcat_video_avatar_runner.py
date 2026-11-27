@@ -1,5 +1,6 @@
 import os
 from contextlib import closing
+from io import BytesIO
 
 import torch
 import torch.distributed as dist
@@ -18,6 +19,7 @@ from lightx2v.server.metrics import monitor_cli
 from lightx2v.utils.envs import GET_DTYPE, GET_RECORDER_MODE
 from lightx2v.utils.profiler import ProfilingContext4DebugL1
 from lightx2v.utils.registry_factory import RUNNER_REGISTER
+from lightx2v.utils.request_defaults import get_input_value
 from lightx2v.utils.streaming_video import StreamingVideoWriter, video_chunk_to_uint8
 from lightx2v.utils.utils import wan_vae_to_comfy
 from lightx2v_platform.base.global_var import AI_DEVICE
@@ -27,6 +29,74 @@ OVERLAP_FRAMES = 13
 
 @RUNNER_REGISTER("longcat_video_avatar")
 class LongCatVideoAvatarRunner(DefaultRunner):
+    # Height, width, reference image, speaker count. A single continuation covers later segments.
+    _WARMUP_SHAPES = ((480, 832, False, 1), (480, 832, True, 1), (512, 768, True, 2))
+    _WARMUP_PROMPTS = (
+        "A person speaking.",
+        "A speaker looks into the camera and explains how a musical instrument works.",
+        "Two people wearing headphones talk across a table in a recording studio, taking turns to describe the instruments and the music they are about to record together.",
+    )
+
+    @ProfilingContext4DebugL1("Warmup")
+    @torch.no_grad()
+    def run_warmup(self):
+        cudnn = torch.backends.cudnn
+        benchmark, deterministic = cudnn.benchmark, cudnn.deterministic
+        for index in range(len(self._WARMUP_SHAPES)):
+            try:
+                # Match the cuDNN kernels selected by seed_all() in run_request.
+                cudnn.benchmark, cudnn.deterministic = False, True
+                self.input_info = self._prepare_warmup_inputs(index)
+                logger.info(f"Warmup LongCat: size={self.input_info.size}, speakers={len(self.input_info.audio_path)}, segments={self.input_info.num_segments}")
+                self._generate_segments(self._warmup_segment)
+            finally:
+                cudnn.benchmark, cudnn.deterministic = benchmark, deterministic
+                self.scheduler.clear()
+                self.input_info = None
+                self.__dict__.pop("inputs", None)
+        self._maybe_freeze_gc()
+
+    def _prepare_warmup_inputs(self, index):
+        import numpy as np
+        import soundfile as sf
+
+        height, width, with_reference, speakers = self._WARMUP_SHAPES[index]
+        size = get_input_value(self.config, "size", None)
+        if not size:
+            size = [max(stride, side // stride * stride) for side, stride in zip((height, width), self.spatial_alignment)]
+        # The shortest continuation leaves exactly one latent frame to denoise.
+        frames = OVERLAP_FRAMES + self.config["vae_scale"]
+        image = None
+        if with_reference:
+            frames = max(frames, get_input_value(self.config, "num_frames"))
+            image = BytesIO()
+            Image.new("RGB", (size[1], size[0])).save(image, format="PNG")
+            image.seek(0)
+        silence = BytesIO()
+        sf.write(silence, np.zeros(44100, dtype=np.float32), 44100, format="WAV")
+        return self.get_input_info_type("s2v")(
+            task="s2v",
+            prompt=self._WARMUP_PROMPTS[index],
+            seed=0,
+            size=size,
+            num_frames=frames,
+            num_segments=2,
+            image_path=image,
+            audio_path=[BytesIO(silence.getvalue()) for _ in range(speakers)],
+        )
+
+    def _warmup_segment(self, _segment_idx):
+        schedule = self.scheduler.lora_schedule
+        for step, strengths in enumerate(schedule):
+            first = step == 0 or strengths != schedule[step - 1]
+            last = step + 1 == len(schedule) or strengths != schedule[step + 1]
+            # Euler has no multistep history. Consume a phase's prefix K/V before switching weights.
+            if first or (last and "condition_kv" in self.inputs):
+                self.scheduler.step_pre(step)
+                self.model.infer(self.inputs)
+                self.scheduler.step_post()
+        return self.scheduler.latents
+
     def init_scheduler(self):
         self.scheduler = LongCatVideoAvatarScheduler(self.config)
 
@@ -47,7 +117,8 @@ class LongCatVideoAvatarRunner(DefaultRunner):
         if config.get("vae_decoder_channels_last_3d", False):
             convert_to_channels_last_3d(self.vae.model.decoder)
         if config.get("vae_use_compile", False):
-            self.vae.compile_decoder()
+            # Reuse the same decoder graphs across spatial tiles and request sizes.
+            self.vae.compile_decoder(dynamic=True)
         # The release normalizes the reference in FP32, then decodes in BF16.
         mean, std = torch.tensor([config["vae_latents_mean"], config["vae_latents_std"]], dtype=torch.float32, device=self.init_device)
         self.vae.scale = (mean.bfloat16(), std.bfloat16().reciprocal())
@@ -291,6 +362,39 @@ class LongCatVideoAvatarRunner(DefaultRunner):
             logger.info(f"Saved LongCat-Video-Avatar result to {info.save_result_path}")
         return {}
 
+    def _generate_segments(self, run_segment):
+        input_info = self.input_info
+        self.video_writer = None
+        result_chunks = []
+        self.check_stop()
+        encoded = self._run_and_broadcast(self.run_input_encoder)
+        text = self.text_encoder.infer([input_info.prompt])[0] if self.text_tp_group is not None else encoded.pop("text")
+        projected_text = self.model.pre_infer.project_text(text)
+        audio = encoded["audio"]
+        radius = self.config["audio_window"] // 2
+        indices = torch.arange(input_info.num_frames, device=self.init_device)[:, None] + torch.arange(-radius, radius + 1, device=self.init_device)
+        generator = torch.Generator(device=self.init_device).manual_seed(input_info.seed)
+        reference = encoded.pop("reference", None)
+        anchor = None
+        for index in range(input_info.num_segments):
+            self.check_stop()
+            self.scheduler.prepare(input_info, reference, generator, anchor)
+            start = index * (input_info.num_frames - OVERLAP_FRAMES)
+            segment_audio = audio[:, (indices + start).clamp(0, audio.shape[1] - 1)]
+            # All continuation segments in this request share the same anchored grid.
+            self.inputs = self.model.prepare_condition(projected_text, segment_audio, encoded.get("speaker_masks"), rope=self.inputs["rope"] if index > 1 else None)
+            latents = run_segment(index)
+            self.check_stop()
+            has_next_segment = index + 1 < input_info.num_segments
+            if index:
+                latents = latents[:, :, 1:]
+            elif has_next_segment:
+                anchor = latents[:, :, :1].clone()
+            if has_next_segment or input_info.save_result_path or input_info.return_result_tensor:
+                outputs = self._run_and_broadcast(self._decode_segment, latents, index, has_next_segment, result_chunks)
+                reference = outputs.get("reference")
+        return torch.cat(result_chunks) if result_chunks else None
+
     @torch.no_grad()
     @ProfilingContext4DebugL1(
         "RUN pipeline",
@@ -302,38 +406,9 @@ class LongCatVideoAvatarRunner(DefaultRunner):
         if GET_RECORDER_MODE():
             monitor_cli.lightx2v_worker_request_count.inc()
         self.input_info = input_info
-        self.video_writer = None
         self.video_segment_num = input_info.num_segments
-        result_chunks = []
         try:
-            self.check_stop()
-            encoded = self._run_and_broadcast(self.run_input_encoder)
-            text = self.text_encoder.infer([input_info.prompt])[0] if self.text_tp_group is not None else encoded.pop("text")
-            projected_text = self.model.pre_infer.project_text(text)
-            audio = encoded["audio"]
-            radius = self.config["audio_window"] // 2
-            indices = torch.arange(input_info.num_frames, device=self.init_device)[:, None] + torch.arange(-radius, radius + 1, device=self.init_device)
-            generator = torch.Generator(device=self.init_device).manual_seed(input_info.seed)
-            reference = encoded.pop("reference", None)
-            anchor = None
-            for index in range(input_info.num_segments):
-                self.check_stop()
-                self.scheduler.prepare(input_info, reference, generator, anchor)
-                start = index * (input_info.num_frames - OVERLAP_FRAMES)
-                segment_audio = audio[:, (indices + start).clamp(0, audio.shape[1] - 1)]
-                # All continuation segments in this request share the same anchored grid.
-                self.inputs = self.model.prepare_condition(projected_text, segment_audio, encoded.get("speaker_masks"), rope=self.inputs["rope"] if index > 1 else None)
-                latents = self.run_segment(index)
-                self.check_stop()
-                has_next_segment = index + 1 < input_info.num_segments
-                if index:
-                    latents = latents[:, :, 1:]
-                elif has_next_segment:
-                    anchor = latents[:, :, :1].clone()
-                if has_next_segment or input_info.save_result_path or input_info.return_result_tensor:
-                    outputs = self._run_and_broadcast(self._decode_segment, latents, index, has_next_segment, result_chunks)
-                    reference = outputs.get("reference")
-            video = torch.cat(result_chunks) if result_chunks else None
+            video = self._generate_segments(self.run_segment)
         except BaseException:
             if self.video_writer:
                 self.video_writer.abort()

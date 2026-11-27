@@ -27,9 +27,9 @@ CACHE_T = 2
 class _CompiledVaeComponent(nn.Module):
     """Normalize chunk strides before entering the compiler's input guards."""
 
-    def __init__(self, module):
+    def __init__(self, module, dynamic=None):
         super().__init__()
-        self.compiled = torch.compile(module, dynamic=None)
+        self.compiled = torch.compile(module, dynamic=dynamic)
 
     def forward(self, x, *args, **kwargs):
         # A one-frame view keeps the channel stride of its source video. Make
@@ -1025,9 +1025,9 @@ class WanVAE:
         if not isinstance(self.model.encoder, _CompiledVaeComponent):
             self.model.encoder = _CompiledVaeComponent(self.model.encoder)
 
-    def compile_decoder(self):
+    def compile_decoder(self, dynamic=None):
         if not isinstance(self.model.decoder, _CompiledVaeComponent):
-            self.model.decoder = _CompiledVaeComponent(self.model.decoder)
+            self.model.decoder = _CompiledVaeComponent(self.model.decoder, dynamic=dynamic)
 
     def compile(self):
         """Compile native chunks without replacing their temporal cache owner."""
