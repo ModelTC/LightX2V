@@ -21,6 +21,8 @@ class WanPreInferModuleOutput:
     cos_sin: Optional[torch.Tensor] = None
     rope_positions: Optional[torch.Tensor] = None
     valid_token_len: int = 0
+    # Token count before sequence-parallel padding; None when no padding was added.
+    seq_p_valid_len: Optional[int] = None
     valid_latent_num: int = 0
     # extra
     adapter_args: Dict[str, Any] = field(default_factory=dict)
