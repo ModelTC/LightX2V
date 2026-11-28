@@ -112,8 +112,9 @@ class X264VARecorder:
     def convert_data(self, audios, images):
         # Convert audio data to 16-bit integer format
         audio_datas = torch.clamp(torch.round(audios * 32767), -32768, 32767).to(torch.int16).cpu().numpy().reshape(-1)
-        # Convert to numpy and scale to [0, 255], convert RGB to BGR for OpenCV/FFmpeg
-        image_datas = (images * 255).clamp(0, 255).to(torch.uint8).cpu().numpy()
+        # Keep uint8 RGB as-is; scale normalized floating-point input.
+        image_datas = images if images.dtype == torch.uint8 else (images * 255).clamp(0, 255).to(torch.uint8)
+        image_datas = image_datas.cpu().numpy()
 
         logger.info(f"image_datas: {image_datas.shape} {image_datas.dtype} {image_datas.min()} {image_datas.max()}")
         reample_audios = resample(audio_datas, int(len(audio_datas) * 48000 / self.sample_rate))

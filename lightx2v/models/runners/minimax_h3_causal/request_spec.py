@@ -13,5 +13,8 @@ REQUEST = dict(
 )
 
 SPECS = {
-    "minimax_h3_causal": RequestSpec({task: REQUEST for task in ("refa2v", "refa2av")}, context=VIDEO),
+    "minimax_h3_causal": RequestSpec(
+        {task: REQUEST for task in ("refa2v", "refa2av")},
+        context=dict(VIDEO, stream_config=Argument(type=dict, input_info_default={})),
+    ),
 }

@@ -10,6 +10,7 @@ class EdenLiveScheduler(WanScheduler):
     def __init__(self, config):
         super().__init__(config)
         self.is_wan21 = config["model_cls"] in ["wan21_edenlive", "wan21_edenlive_ar"]
+        self.infinite_chunks = False
 
     def clear(self):
         super().clear()
@@ -17,8 +18,13 @@ class EdenLiveScheduler(WanScheduler):
         self.latents_input = None
         self.chunk_start = 0
         self.cache_update = False
+        self.infinite_chunks = False
 
     def prepare(self, seed, latent_shape, image_encoder_output=None):
+        self.infinite_chunks = int(latent_shape[1]) <= 0
+        if self.infinite_chunks:
+            latent_shape = [*latent_shape]
+            latent_shape[1] = int(self.config["ar_config"]["num_frame_per_chunk"])
         self.generator = torch.Generator(device=AI_DEVICE).manual_seed(seed)
         self.latents = torch.randn(latent_shape, generator=self.generator, device=AI_DEVICE, dtype=GET_DTYPE())
         self.condition_frame = image_encoder_output["clean_first_frame"].to(self.latents)
@@ -27,10 +33,15 @@ class EdenLiveScheduler(WanScheduler):
         self._prepare_timesteps()
 
     def _prepare_step(self, step_index, chunk_start, frames, cache_update):
+        latent_start = chunk_start
+        if self.infinite_chunks:
+            if not cache_update and step_index == 0 and chunk_start > 0:
+                self.latents.normal_(generator=self.generator)
+            latent_start = 0
         self.step_index = step_index
         self.chunk_start = chunk_start
         self.cache_update = cache_update
-        self.latents_input = self.latents[:, chunk_start : chunk_start + frames]
+        self.latents_input = self.latents[:, latent_start : latent_start + frames]
         self.timestep_input = torch.zeros(1, device=AI_DEVICE) if cache_update else self.timesteps[step_index : step_index + 1].float()
 
     def _pin_first_frame(self):
@@ -103,4 +114,4 @@ class EdenLiveARScheduler(EdenLiveScheduler):
             x0.mul_(1 - sigma_next).add_(noise.mul_(sigma_next))
         if self.chunk_start == 0:
             x0[:, :1] = self.condition_frame
-        self.latents[:, self.chunk_start : self.chunk_start + x0.shape[1]] = x0
+        self.latents_input.copy_(x0)

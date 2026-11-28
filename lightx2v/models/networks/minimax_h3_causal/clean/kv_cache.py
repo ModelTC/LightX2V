@@ -35,8 +35,9 @@ class MiniMaxH3CleanKVCache:
         self._prefix_lengths: torch.Tensor | None = None
         self._entry_key: "CleanCacheKey" | None = None
         self._persist = False
-        self._chunk_rows = max(plan.chunk_row_slice(index).stop - plan.chunk_row_slice(index).start for index in range(plan.num_chunks))
-        self._num_chunk_slots = plan.policy.sink_chunk_num + plan.policy.latest_chunk_num
+        self._chunk_rows = plan.max_chunk_rows
+        latest_slots = max(plan.policy.latest_chunk_num, 2) if plan.live_stream else plan.policy.latest_chunk_num
+        self._num_chunk_slots = plan.policy.sink_chunk_num + latest_slots
         self._chunk_slots: dict["CleanCacheKey", int] = {}
         self._next_chunk_slot = 0
         self._chunk_storage = [None] * num_blocks

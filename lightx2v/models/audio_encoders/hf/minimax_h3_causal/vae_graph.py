@@ -20,7 +20,8 @@ class MiniMaxH3AudioDecoderGraph:
         self.entries = {}
         context = AUDIO_DECODER_CONTEXT_LATENTS
         chunk = FRAMES_PER_CHUNK * vae.sampling_rate / (FPS * vae.hop_length)
-        self.window_lengths = {2 * context + math.floor(chunk), 2 * context + math.ceil(chunk)}
+        # Live low latency keeps only left history; exact decode keeps both sides.
+        self.window_lengths = {history + size for history in (context, 2 * context) for size in (math.floor(chunk), math.ceil(chunk))}
         # Evaluate fixed parametrizations once, on the same device and in FP32.
         # Reference audio encoding retains its original weights and execution.
         for module in vae.decoder.modules():
@@ -29,7 +30,7 @@ class MiniMaxH3AudioDecoderGraph:
 
     @torch.no_grad()
     def __call__(self, value):
-        # Only the two steady streaming windows are captured. Startup and tail
+        # Only steady streaming windows are captured. Startup and tail
         # lengths use native decoding, so graph memory does not grow with time.
         if value.shape[-1] not in self.window_lengths:
             return self.vae.decode_raw(value, stereo_batch=True, return_cpu=False)

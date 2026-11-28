@@ -190,6 +190,20 @@ def temporal_position_span(num_latent_frames: int) -> float:
     return float(spans.sum())
 
 
+def causal_chunk_audio_range(chunk_index: int) -> tuple[int, int]:
+    """Absolute audio-latent slice of one full ``LATENTS_PER_CHUNK`` video chunk.
+
+    The end index is the rotary time of the next video-latent boundary: an exact
+    integer when the span lands on one, otherwise the next audio latent.
+    """
+    if chunk_index < 0:
+        raise ValueError(f"chunk_index must be non-negative, got {chunk_index}")
+
+    # Five video latents span 17 frames at 24 fps: 85/3 audio latents.
+    # Integer ceil keeps the 29/28/28 cycle exact even in long live sessions.
+    return (85 * chunk_index + 2) // 3, (85 * (chunk_index + 1) + 2) // 3
+
+
 def build_t2av_packed_sequence(
     num_text_tokens: int,
     num_latent_frames: int,
